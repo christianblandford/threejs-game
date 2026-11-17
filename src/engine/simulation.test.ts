@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createRandom } from "./random";
 import { createSimulation, TICK, type Frame } from "./simulation";
 
-const idle = (): Frame => ({ move: [0, 0], run: false, actions: [], look: [0, 0] });
+const idle = (): Frame => ({ move: [0, 0], run: false, actions: [], look: [0, 0], zoom: 0 });
 
 function setup(blocked = { now: false }) {
   const seen: Frame[] = [];
@@ -59,6 +59,23 @@ describe("the simulation's clock", () => {
     simulation.send({ move: [1, 0] }, 2);
     expect(await simulation.step(3)).toBe(3);
     expect(simulation.recorded.map((frame) => frame.move[0])).toEqual([1, 1, 0]);
+  });
+
+  it("counts the ticks the frame loop ran, which a stepped run has none of", async () => {
+    const { simulation } = setup();
+    await simulation.step(3);
+    expect(simulation.live).toBe(0);
+    simulation.advance(TICK * 2, idle);
+    expect(simulation.live).toBe(2);
+    simulation.reset();
+    expect(simulation.live).toBe(0);
+  });
+
+  it("turns the wheel once, on the first of the ticks it was sent for", async () => {
+    const { simulation, seen } = setup();
+    simulation.send({ zoom: 2 }, 3);
+    await simulation.step(3);
+    expect(seen.map((frame) => frame.zoom)).toEqual([2, 0, 0]);
   });
 
   it("starts again from nothing", async () => {

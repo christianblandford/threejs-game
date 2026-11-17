@@ -272,3 +272,59 @@ to keep: one point light that is always in the scene (giving no light), so
 the first real one is not the change that recompiles everything; and no
 shadows from these lights (a shadow-casting light goes back to the ordinary
 path).
+
+## Runs that did not repeat
+
+The game is meant to come out the same from the same seed and inputs. A
+reviewer reading the code found most of what follows; running one script
+twelve times found the rest. None of it showed in a short run.
+
+### The same run landed on one of two hashes
+
+A 550-tick walk gave one of two results, about evenly, differing by a few
+millionths of a metre in one fox. Three causes, each enough alone:
+
+- **The world was loaded around the camera.** The camera eases to its
+  place by the screen's clock, so where it was when navigation chose which
+  tiles to build first varied. Load around the player.
+- **Foxes were stood on last run's ground.** After a restart the map
+  drops what the last run's player walked past, and the walkable area is
+  rebuilt a moment later. A fox added in that moment was put on ground
+  about to go; added after, on none. Wait for the rebuild first
+  (`navigation.settled()`).
+- **Foxes were added as their models finished loading**, so which was
+  which to the crowd depended on the network. Load all, then add in order.
+
+How it was found: trace one value per tick in two runs that disagree, find
+the first tick that differs, then look at what that value hides. The foxes'
+positions first differed at tick 540; their hidden steering state differed
+at tick 0.
+
+### A conversation changed the saved world by the clock
+
+Ink seeds each new story from the time of day and keeps the seed in the
+story's memory, which is saved. Two runs alike in every way had different
+saved worlds after one conversation. `createDialogue` now takes the seed
+from the game's own dice.
+
+### Rapier does not forgive a call on a removed body
+
+A door trip still fading when the game was restarted went on to teleport
+the old game's player. That throws inside Rapier, and every Rapier call
+after it throws "recursive use of an object": the page is dead. Anything
+that waits (a fade, a load) checks afterwards that its game is still there.
+
+### A collider counts from the next step, not from when it is added
+
+Rapier's rays and character controller know of a collider only once the
+world has stepped. The first tick after a chunk arrived, or after the
+player was put somewhere, was played against the world as it had been.
+`physics.refresh()` is a step of no time; the tick starts with one.
+
+### What a snapshot left out
+
+Found by asking of each piece of state, "would the next tick go
+differently without it?": the conversation in progress, the way back out
+of a room, which chunks of the level are solid (that depends on where the
+player has been, not only where they are), and the wheel's zoom, which
+was changed straight from a DOM event and never passed through a tick.

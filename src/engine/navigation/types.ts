@@ -87,6 +87,8 @@ export interface Navigation {
   readonly stats: { tiles: number; queued: number };
   /** True while a rebuild is waiting or under way: the walkable world is not yet what it will be. */
   readonly busy: boolean;
+  /** Resolves once the walkable world is what it will be: gets on with any rebuild, whether or not frames are being drawn. */
+  settled(): Promise<void>;
   /** Seeds the random points it hands out (`randomPointAround`), so that a run can be played again. */
   reseed(seed: number): void;
   /** Where that sequence of random points has got to: save it, and set it to carry on from there. */

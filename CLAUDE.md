@@ -55,6 +55,25 @@ map format; three.js is the one being built on.
   scene and the physics, anything it told the engine forgotten. Check it
   by saving the file twice with the game running: no reload, no second
   HUD, no error.
+- A run must come out the same from the same seed and inputs, and four
+  things besides the clock have broken that: input acted on from a DOM
+  event and not from a tick's frame; loading the world around the camera
+  (it eases by the screen's clock) and not the player (`focus()` in
+  `scene.ts`); starting a run on what the run before left loaded (the map's
+  `reset()`, `navigation.settled()` before anyone is stood on it); and
+  making things in the order their files finish loading. Third-party state
+  counts too: Ink seeds itself from the clock unless told otherwise
+  (`createDialogue`'s `seed`). After a change to anything a tick touches,
+  run the same inputs from a fresh page and after `game.time.restart()`
+  several times and compare `game.state.hash()`; a split that shows up one
+  time in two is still a bug.
+- After any `await` in the game or in `src/engine/spaces.ts`, the game may
+  have been taken down (a restart, a saved file): check before touching the
+  player, physics or a map. Rapier does not forgive a call on a removed
+  body: it throws, and every call after it throws too.
+- Colliders added, removed or moved by hand count from the next
+  `physics.refresh()` (the tick starts with one): say so with
+  `physics.changed()` after moving a body yourself.
 - State that the next tick depends on belongs in `snapshot()` and
   `restore()` of whatever owns it, and through them in the game's.
 - Check changes with `npm run check` (type-check, tests, build: what CI runs), then in the

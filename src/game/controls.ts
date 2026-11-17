@@ -12,7 +12,7 @@ import type { Player } from "./player";
  * panel): R the weather, B an explosion a few steps ahead, F flying, N the
  * walkable area.
  */
-export function addControls(systems: { engine: Engine; menu: Menu; player: Player; hud: Hud; fly: FlyCamera; onLeftPlay(): void }): () => void {
+export function addControls(systems: { engine: Engine; menu: Menu; player: Player; hud: Hud; fly: FlyCamera; onZoom(steps: number): void; onLeftPlay(): void }): () => void {
   // Every listener is added with this signal, and taken away again by aborting it.
   const listening = new AbortController();
   const { signal } = listening;
@@ -28,7 +28,8 @@ export function addControls(systems: { engine: Engine; menu: Menu; player: Playe
     if (now !== "playing") systems.onLeftPlay();
     input.releaseAll();
   };
-  canvas.addEventListener("wheel", (event) => menu.state === "playing" && player.zoom(Math.sign(event.deltaY)), { passive: true, signal });
+  // The wheel is input like any other: it is handed to the next tick, not acted on here.
+  canvas.addEventListener("wheel", (event) => menu.state === "playing" && systems.onZoom(Math.sign(event.deltaY)), { passive: true, signal });
 
   let navShown = false;
   window.addEventListener("keydown", (event) => {

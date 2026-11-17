@@ -34,23 +34,24 @@ let rebuilding = false;
  * compiled picture and the loaded map all stay, so it takes a moment and
  * not a reload.
  */
-function rebuild(make: typeof createGame, keepState = false): Promise<void> {
+function rebuild(make: typeof createGame, keepState = false, between?: () => void): Promise<void> {
   // One at a time, in the order asked for: a file saved twice in a moment asks twice, and a game must not be taken down twice.
   const job = queue.then(async () => {
+    // Stays true if the new game cannot be made: the old one is gone, and a game that was taken down must not be given another frame.
     rebuilding = true;
-    try {
-      const { map } = game;
-      const held = game.simulation.held;
-      const playing = game.menu.state !== "menu";
-      const was: GameSnapshot | null = keepState ? game.snapshot() : null;
-      game.dispose(true);
-      game = await make(engine, level, { map, start: playing ? "play" : null });
-      game.simulation.held = held;
-      if (was) await game.restore(was);
-      expose();
-    } finally {
-      rebuilding = false;
-    }
+    const { map } = game;
+    const held = game.simulation.held;
+    const menu = game.menu.state;
+    const was: GameSnapshot | null = keepState ? game.snapshot() : null;
+    game.dispose(true);
+    // (After the old game has had its last word: taking it down ends a conversation, which writes to the saved world.)
+    between?.();
+    game = await make(engine, level, { map, start: menu === "menu" ? null : "play" });
+    game.simulation.held = held;
+    if (menu === "paused") game.menu.set("paused");
+    if (was) await game.restore(was);
+    expose();
+    rebuilding = false;
   });
   queue = job.catch(() => undefined);
   return job;
@@ -58,10 +59,11 @@ function rebuild(make: typeof createGame, keepState = false): Promise<void> {
 let queue: Promise<void> = Promise.resolve();
 /** A fresh run from tick 0. With a save slot of the run's own (`?slot=`), the saved world starts empty too. */
 async function restart(seed?: number): Promise<void> {
-  engine.random.reseed(seed);
-  engine.navigation.reseed(engine.random.seed);
-  if (params.has("slot")) engine.state.reset();
-  await rebuild(createGame);
+  await rebuild(createGame, false, () => {
+    engine.random.reseed(seed);
+    engine.navigation.reseed(engine.random.seed);
+    if (params.has("slot")) engine.state.reset();
+  });
 }
 
 loop.start((seconds, interval) => {
@@ -76,7 +78,7 @@ loop.start((seconds, interval) => {
 });
 
 // The dev bridge. It always speaks of the game that is running now.
-const bridge = createBridge(engine, () => game, restart);
+const bridge = createBridge(engine, () => game, restart, () => queue);
 const bench = createBench(engine, { takeCamera: () => (game.fly.active = true), advance: (seconds, eye) => game.advance(seconds, eye) });
 /** Everything, for the console: `bench.player`, `bench.pace()`, `bench.look(...)`. Made again whenever the game is. */
 function expose(): void {

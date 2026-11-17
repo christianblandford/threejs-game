@@ -24,7 +24,7 @@ export interface LevelInfo {
   /** On the title screen. */
   title: string;
   map: string;
-  /** Where the map is first loaded around, before its `spawn` marker has been read: [x, y, z]. */
+  /** Where the map is first loaded around when it has no `spawn` marker: [x, y, z]. */
   around: [number, number, number];
   interiors: InteriorInfo[];
   /** Zones that announce themselves when walked into: the zone's name in the map, and what to say. */
@@ -39,7 +39,7 @@ export const LEVELS: LevelInfo[] = [
     name: "The town",
     title: "Fox Town",
     map: "/maps/test_town/map.json",
-    // The market square, where the Babylon measurements were taken.
+    // The market square.
     around: [0, 0.2, 18],
     interiors: [{ id: "hall", name: "Town Hall", map: "/maps/test_town/interiors/hall/map.json" }],
     places: { town_gate: "The town gate", market_square: "Market square", wall_walk: "The wall walk", hall_terrace: "The hall", moat: "The moat" },

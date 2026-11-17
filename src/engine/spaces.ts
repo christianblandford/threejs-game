@@ -54,6 +54,13 @@ export interface Arrival {
   yaw: number;
 }
 
+/** The way back out of a place: where its visitor came in from. Plain data, with the position relative to the zero of the place it is in. */
+export interface Way {
+  space: string;
+  position: [number, number, number];
+  yaw: number;
+}
+
 export interface SpacesOptions {
   /** The level the scene was built around, already loaded. */
   home: { id: string; map: LoadedMap };
@@ -91,8 +98,12 @@ export interface Spaces {
   map(id: string): LoadedMap | null;
   /** Where a loaded space's own zero is in the scene. A saved position is kept relative to this. */
   origin(id: string): THREE.Vector3;
-  /** Called on arrival. */
+  /** Called on arrival, once the trip is over and the player can move again. */
   onTravelled: ((trip: { from: string; to: string }) => void) | null;
+  /** The way back out of each place that was walked into: part of the state of play (where "Leave" leads). */
+  ways(): Record<string, Way>;
+  /** Puts those back as they were. A place not loaded yet is told its way back when it loads. */
+  setWays(ways: Record<string, Way>): void;
   /** How long things took (ms). */
   readonly timings: { loads: Record<string, number>; lastTrip: { from: string; to: string; ms: number } | null };
   /** Once a frame, with where the camera is: streams the current map, and starts loading what is behind a nearby door. */
@@ -119,7 +130,7 @@ interface Loaded {
   map: LoadedMap;
   origin: THREE.Vector3;
   environment: Environment;
-  cameFrom: ({ space: string } & Arrival) | null;
+  cameFrom: Way | null;
 }
 
 /** A marker's place in three's space, and the heading a character there faces (the files speak a left-handed space). */
@@ -137,6 +148,8 @@ export function createSpaces(options: SpacesOptions): Spaces {
   /** Interiors being set up ahead of need, and those somebody is waiting for. */
   const arriving = new Map<string, LoadedMap>();
   const hurrying = new Set<string>();
+  /** Ways back that were restored for places not loaded yet. */
+  const waysToCome = new Map<string, Way>();
   const home: Loaded = { id: options.home.id, map: options.home.map, origin: new THREE.Vector3(), environment: OUTDOORS, cameFrom: null };
   spaces.set(home.id, home);
   let current = home.id;
@@ -189,6 +202,10 @@ export function createSpaces(options: SpacesOptions): Spaces {
       const origin = new THREE.Vector3(edge.x - POCKET_GAP, edge.y, edge.z + along * POCKET_PLOT);
       const started = performance.now();
       pending = options.load(info, origin).then(async (map) => {
+        if (disposed) {
+          map.dispose();
+          throw new Error(`"${id}" arrived after the game it was for had gone.`);
+        }
         // A map streams around the camera, and the camera is elsewhere: have
         // this one stream around its own middle until somebody walks in.
         const { min, max } = map.manifest;
@@ -200,7 +217,8 @@ export function createSpaces(options: SpacesOptions): Spaces {
         await map.settled(hurrying.has(id));
         arriving.delete(id);
         if (disposed) throw new Error(`"${id}" arrived after the game it was for had gone.`);
-        const loaded: Loaded = { id, map, origin, environment: { ...INDOORS, ...info.environment }, cameFrom: null };
+        const loaded: Loaded = { id, map, origin, environment: { ...INDOORS, ...info.environment }, cameFrom: waysToCome.get(id) ?? null };
+        waysToCome.delete(id);
         spaces.set(id, loaded);
         loading.delete(id);
         attach(loaded);
@@ -236,18 +254,18 @@ export function createSpaces(options: SpacesOptions): Spaces {
     });
 
   async function travel(destination: string, at?: Arrival): Promise<void> {
-    if (travelling) return;
+    if (travelling || disposed) return;
     const here = spaces.get(current)!;
     let id: string;
     let markerName: string | undefined;
-    let back: Loaded["cameFrom"] = null;
+    let back: Way | null = null;
     if (destination === "back") {
       back = here.cameFrom;
       if (!back) {
-        // Nobody walked in (a saved game was restored here): go out by a door that leads in.
+        // Nobody walked in (a saved game was picked up here): go out by a door that leads in.
         const way = interact.all("door").find((door) => door.space !== current && door.name.split("#")[0] === current);
         if (!way) throw new Error(`"back" from "${current}", but no door leads into it.`);
-        back = { space: way.space, position: way.position.clone(), yaw: markerYaw(way.marker) };
+        back = { space: way.space, position: way.position.clone().sub(api.origin(way.space)).toArray(), yaw: markerYaw(way.marker) };
       }
       id = back.space;
     } else {
@@ -257,17 +275,23 @@ export function createSpaces(options: SpacesOptions): Spaces {
 
     travelling = true;
     interact.suspended = true;
+    let arrived: { from: string; to: string } | null = null;
     try {
       const started = performance.now();
       // Waited for behind the fade: no per-frame pace now.
       hurrying.add(id);
       void arriving.get(id)?.settled();
       const [there] = await Promise.all([load(id), fade(1)]);
+      // After every wait: the game these places belong to may have been taken
+      // down meanwhile (restarted, or put together again from new code), and
+      // its player and maps with it. Then there is nowhere to arrive.
+      if (disposed) return;
 
       let position: THREE.Vector3;
       let yaw: number;
       if (back) {
-        ({ position, yaw } = back);
+        position = new THREE.Vector3(...back.position).add(there.origin);
+        yaw = back.yaw;
       } else if (at) {
         position = at.position.clone().add(there.origin);
         yaw = at.yaw;
@@ -278,7 +302,7 @@ export function createSpaces(options: SpacesOptions): Spaces {
         yaw = markerYaw(marker);
         // Remember the way back: where the player stands now, turned round.
         const now = options.whereabouts();
-        there.cameFrom = { space: current, position: now.position.clone(), yaw: now.yaw + Math.PI };
+        there.cameFrom = { space: current, position: now.position.clone().sub(here.origin).toArray(), yaw: now.yaw + Math.PI };
       }
 
       // The space being left stays loaded exactly as it is. The one arrived
@@ -286,6 +310,7 @@ export function createSpaces(options: SpacesOptions): Spaces {
       here.map.hold(options.whereabouts().position);
       there.map.hold(position);
       await there.map.settled();
+      if (disposed) return;
       // One place is seen at a time.
       there.map.shown = true;
       if (here !== there) here.map.shown = false;
@@ -293,16 +318,24 @@ export function createSpaces(options: SpacesOptions): Spaces {
       options.place(position, yaw);
       const from = current;
       current = id;
+      interact.landed(position, id);
 
       // A few frames behind the black: anything seen for the first time compiles its shaders now.
       await frames(SETTLE_FRAMES);
+      if (disposed) return;
       there.map.hold(null); // the camera is with the player again: stream around it
       await frames(2);
       timings.lastTrip = { from, to: id, ms: Math.round(performance.now() - started) };
-      api.onTravelled?.({ from, to: id });
+      arrived = { from, to: id };
+    } catch (error) {
+      if (!disposed) throw error; // (taken down on the way: nobody is waiting to be told)
     } finally {
       travelling = false;
-      interact.suspended = false;
+      if (!disposed) {
+        interact.suspended = false;
+        // Told once the trip is over: what the game does on arrival (saving where the player is) it will not do mid-trip.
+        if (arrived) api.onTravelled?.(arrived);
+      }
       await fade(0);
     }
   }
@@ -321,6 +354,20 @@ export function createSpaces(options: SpacesOptions): Spaces {
     origin: (id) => spaces.get(id)?.origin ?? new THREE.Vector3(),
     onTravelled: null,
     timings,
+    ways() {
+      const ways: Record<string, Way> = Object.fromEntries(waysToCome);
+      for (const space of spaces.values()) if (space.cameFrom) ways[space.id] = space.cameFrom;
+      return structuredClone(ways);
+    },
+    setWays(ways) {
+      waysToCome.clear();
+      for (const space of spaces.values()) space.cameFrom = null;
+      for (const [id, way] of Object.entries(ways)) {
+        const space = spaces.get(id);
+        if (space) space.cameFrom = structuredClone(way);
+        else waysToCome.set(id, structuredClone(way));
+      }
+    },
     dispose() {
       disposed = true;
       sheet.remove();

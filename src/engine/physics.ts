@@ -17,6 +17,16 @@ export interface Physics {
   readonly world: RAPIER.World;
   /** Advances the world by `dt` seconds. */
   step(dt: number): void;
+  /**
+   * Makes what was added, taken away or put somewhere since the last step
+   * count at once. Rapier's rays and its character controller only know of
+   * a collider once the world has stepped, so without this the first tick
+   * after a chunk arrives (or after the player is put somewhere) is played
+   * against the world as it was. Does nothing when nothing has changed.
+   */
+  refresh(): void;
+  /** Says that something was moved by hand (a body put somewhere): the next `refresh` has work to do. */
+  changed(): void;
   /** A static collider from triangles in the world's coordinates (see `worldTriangles`). */
   addTriangles(vertices: Float32Array, indices: Uint32Array): RAPIER.Collider;
   /** A static box: `half` is half its size along its own axes. */
@@ -50,6 +60,8 @@ export async function createPhysics(): Promise<Physics> {
   await RAPIER.init();
   const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   const ray = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
+  /** Something was added, removed or put somewhere since the world last stepped. */
+  let stale = false;
 
   return {
     RAPIER,
@@ -57,11 +69,24 @@ export async function createPhysics(): Promise<Physics> {
     step(dt) {
       world.timestep = Math.min(dt, 1 / 30);
       world.step();
+      stale = false;
+    },
+    refresh() {
+      if (!stale) return;
+      // A step of no time: nothing moves, and everything is where the queries look for it.
+      world.timestep = 0;
+      world.step();
+      stale = false;
+    },
+    changed() {
+      stale = true;
     },
     addTriangles(vertices, indices) {
+      stale = true;
       return world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices));
     },
     addBox(centre, half, rotation) {
+      stale = true;
       return world.createCollider(
         RAPIER.ColliderDesc.cuboid(Math.max(half.x, 0.01), Math.max(half.y, 0.01), Math.max(half.z, 0.01))
           .setTranslation(centre.x, centre.y, centre.z)
@@ -69,9 +94,11 @@ export async function createPhysics(): Promise<Physics> {
       );
     },
     addCylinder(foot, radius, height) {
+      stale = true;
       return world.createCollider(RAPIER.ColliderDesc.cylinder(height / 2, radius).setTranslation(foot.x, foot.y + height / 2, foot.z));
     },
     remove(collider) {
+      stale = true;
       world.removeCollider(collider, false);
     },
     raycast(origin, direction, reach, ignore) {

@@ -1,7 +1,7 @@
 import { differences, hashOf, valueAt } from "../engine/data";
 import type { Engine } from "../engine/engine";
 import { drawByHand, gpuDone } from "../engine/renderer";
-import type { Frame } from "../engine/simulation";
+import { TICK, type Frame } from "../engine/simulation";
 import type { Game, GameSnapshot } from "./scene";
 
 /**
@@ -15,6 +15,12 @@ import type { Game, GameSnapshot } from "./scene";
  * same inputs give the same state, every time: `input.recording()` is a
  * run, and `input.replay()` plays one again from the start.
  *
+ * That holds for a run that was stepped. Ticks the frame loop runs (the
+ * clock not held: somebody playing) do not wait for the world to finish
+ * loading around the player, so what had arrived by each of them went by
+ * the clock; a recording says whether it has any (`exact`), and one that
+ * does plays again closely, not to the same hash.
+ *
  * Open the page with `?slot=<name>` for a saved world of the run's own:
  * `time.restart()` then starts from an empty world and leaves the real
  * saved game alone.
@@ -23,9 +29,12 @@ export interface Recording {
   seed: number;
   level: string;
   frames: Frame[];
+  /** True if every tick was stepped, none run by the frame loop: only then is the run sure to play again to the same state. */
+  exact: boolean;
 }
 
-export function createBridge(engine: Engine, current: () => Game, restart: (seed?: number) => Promise<void>) {
+/** `rebuilt` resolves once no game is being put together again (after a restart, or a file saved): until then the one `current` gives is half made. */
+export function createBridge(engine: Engine, current: () => Game, restart: (seed?: number) => Promise<void>, rebuilt: () => Promise<void>) {
   const { renderer, viewport, canvas } = engine;
   const logs: { tick: number; level: "error" | "warn"; message: string }[] = [];
   const sounds: { tick: number; name: string }[] = [];
@@ -40,13 +49,19 @@ export function createBridge(engine: Engine, current: () => Game, restart: (seed
     play(name, options);
   };
 
-  /** Draws the world as it stands, by hand: whatever the frame loop is doing (in a hidden page, nothing). */
-  function draw(frames = 1): void {
+  /**
+   * Draws the world as it stands, by hand: whatever the frame loop is doing
+   * (in a hidden page, nothing). `seconds` is how much time of the game has
+   * gone by since it was last drawn: what only moves on screen (the legs,
+   * the camera easing to its place) moves by that much.
+   */
+  function draw(frames = 1, seconds = 0): void {
     const game = current();
-    if (!game.fly.active) game.player.present(0, 1);
-    game.npcs.present(1);
+    const flying = game.fly.active;
     for (let i = 0; i < frames; i++) {
-      game.advance(0, engine.camera.position);
+      game.advance(0, game.focus());
+      if (!flying) game.player.present(i === 0 ? seconds : 0, 1);
+      game.npcs.present(1);
       drawByHand(renderer, engine.draw);
     }
   }
@@ -60,8 +75,9 @@ export function createBridge(engine: Engine, current: () => Game, restart: (seed
     resume: () => void (current().simulation.held = false),
     /** Runs `count` ticks now, waiting for the world to be loaded before each, and draws. Resolves with the tick reached. */
     async step(count = 1) {
+      await rebuilt();
       const reached = await current().simulation.step(count);
-      draw();
+      draw(1, count * TICK);
       return reached;
     },
     /** Runs on to this tick. Going back needs `state.restore` or `time.restart`. */
@@ -89,15 +105,20 @@ export function createBridge(engine: Engine, current: () => Game, restart: (seed
     look: (yaw: number, pitch = current().player.pitch) => current().simulation.send({ look: [yaw, pitch] }, 1),
     pending: () => current().simulation.pending,
     /** Every tick's input since the run started: with the seed, the run. */
-    recording: (): Recording => ({ seed: engine.random.seed, level: current().level.id, frames: structuredClone([...current().simulation.recorded]) }),
-    /** Plays a recording from the start: restarts with its seed, then runs its ticks. Resolves with where it ended. */
+    recording: (): Recording => ({ seed: engine.random.seed, level: current().level.id, frames: structuredClone([...current().simulation.recorded]), exact: current().simulation.live === 0 }),
+    /** Plays a recording from the start: restarts with its seed, then runs its ticks. Resolves with where it ended. The clock is left as it was found, held or running. */
     async replay(recording: Recording) {
-      await time.restart(recording.seed);
-      const game = current();
-      game.simulation.held = true;
-      game.simulation.queue(recording.frames);
-      await time.step(recording.frames.length);
-      return { tick: tick(), hash: state.hash() };
+      const wasHeld = current().simulation.held;
+      // Held before the restart, not after: or the frame loop gets a few ticks of its own in first.
+      current().simulation.held = true;
+      try {
+        await time.restart(recording.seed);
+        current().simulation.queue(recording.frames);
+        await time.step(recording.frames.length);
+        return { tick: tick(), hash: state.hash() };
+      } finally {
+        current().simulation.held = wasHeld;
+      }
     },
   };
 
@@ -107,6 +128,7 @@ export function createBridge(engine: Engine, current: () => Game, restart: (seed
     /** Everything the next tick depends on; and putting it back. */
     snapshot: () => structuredClone(current().snapshot()),
     async restore(snapshot: GameSnapshot) {
+      await rebuilt();
       await current().restore(snapshot);
       draw();
     },
@@ -141,6 +163,7 @@ export function createBridge(engine: Engine, current: () => Game, restart: (seed
   return {
     /** Resolves once the world around the player is loaded and still, with where things stand. */
     async ready() {
+      await rebuilt();
       await current().ready();
       return { tick: tick(), level: current().level.id, space: current().spaces.current };
     },

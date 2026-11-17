@@ -1,5 +1,6 @@
 import * as THREE from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { disposeObject } from "../engine/dispose";
 import type { Physics } from "../engine/physics";
 
 /**
@@ -51,6 +52,14 @@ export interface Player {
   teleport(feet: THREE.Vector3, yaw?: number): void;
   /** One tick of the fox itself: where it is, how fast it moves, whether it stands, swims or falls. Draws nothing. */
   simulate(dt: number, input: PlayerInput): void;
+  /**
+   * Puts the camera where this tick's view is, exactly: at its full distance
+   * (or against whatever is in the way), with none of the easing that
+   * drawing has. What a tick judges by the camera (what "use" would use) is
+   * judged from here, so it depends on the state of play and on nothing
+   * about how often the screen was drawn.
+   */
+  aim(): void;
   /**
    * Draws the fox and places the camera, `alpha` of the way from where it
    * was a tick ago to where it is now, with `seconds` passed for what only
@@ -268,10 +277,14 @@ export async function createPlayer(scene: THREE.Scene, camera: THREE.Perspective
     model.visible = shown > HIDE_WITHIN;
   }
 
+  /** Set once the fox has been taken out of the world: its body is gone, and Rapier does not forgive being asked about it. */
+  let disposed = false;
   function teleport(feet: THREE.Vector3, toYaw?: number): void {
+    if (disposed) return; // asked for by something that outlived this game (a door still being gone through)
     position.copy(feet);
     body.setTranslation({ x: feet.x, y: feet.y + centreHeight, z: feet.z }, true);
     body.setNextKinematicTranslation({ x: feet.x, y: feet.y + centreHeight, z: feet.z });
+    physics.changed();
     velocity.set(0, 0, 0);
     fall = 0;
     airTime = 0;
@@ -372,6 +385,7 @@ export async function createPlayer(scene: THREE.Scene, camera: THREE.Perspective
       ({ fall, grounded, facing, yaw, pitch, mode, distance, swimming, surface, wantJump, coyote, airTime, arriving } = saved);
       body.setTranslation({ x: position.x, y: position.y + centreHeight, z: position.z }, true);
       body.setNextKinematicTranslation({ x: position.x, y: position.y + centreHeight, z: position.z });
+      physics.changed();
       if (swimming) controller.disableSnapToGround();
       else controller.enableSnapToGround(0.25);
       before.copy(position);
@@ -381,16 +395,24 @@ export async function createPlayer(scene: THREE.Scene, camera: THREE.Perspective
       api.present(0, 1);
     },
     dispose() {
+      if (disposed) return;
+      disposed = true;
       mixer.stopAllAction();
-      root.removeFromParent();
       world.removeCharacterController(controller);
       world.removeRigidBody(body);
-      model.traverse((object) => {
-        const mesh = object as THREE.Mesh;
-        if (!mesh.isMesh) return;
-        mesh.geometry.dispose();
-        for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) material.dispose();
-      });
+      physics.changed();
+      disposeObject(root);
+    },
+    aim() {
+      const reach = mode === "third" ? clamp(distance, MIN_DISTANCE, MAX_DISTANCE) : 0;
+      const closeness = 1 - clamp(reach / MIN_DISTANCE, 0, 1);
+      target.copy(position).y += PIVOT_HEIGHT + (EYE_HEIGHT - PIVOT_HEIGHT) * closeness;
+      back.set(Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
+      const clear = reach > 0.01 ? physics.raycast(target, back, reach + 0.3, capsule) : null;
+      ahead.set(-Math.sin(yaw), 0, -Math.cos(yaw)).multiplyScalar(HEAD_FORWARD * closeness);
+      eye.copy(target).addScaledVector(back, clear === null ? reach : Math.min(reach, Math.max(0, clear - 0.3))).add(ahead);
+      camera.position.copy(eye);
+      camera.lookAt(eye.sub(back));
     },
     simulate(dt, input) {
       before.copy(position);

@@ -51,6 +51,8 @@ export interface LoadedMap {
    * what is shown stays as the player left it.
    */
   hold(point: THREE.Vector3 | null): void;
+  /** The point it is held around, or null when it follows `update`. */
+  readonly heldAt: THREE.Vector3 | null;
   /** False hides everything of the map (its collision stays). For a map the player is not in. */
   shown: boolean;
   /**
@@ -68,6 +70,20 @@ export interface LoadedMap {
   collisionGeometry(): { meshes: NavSource[]; obstacles: NavObstacle[] };
   /** Called when a chunk's detailed version has been set up or freed. */
   onDetailChanged: (() => void) | null;
+  /**
+   * The chunks loaded in full detail, by id, in order: where the world is
+   * solid and can be walked. That depends on where the camera has been, not
+   * only on where it is (detail is kept a while after it is left), so it is
+   * part of the state of play.
+   */
+  readonly detail: string[];
+  /**
+   * Forgets where the camera has been: brings what is loaded in detail to
+   * exactly these chunks, or without a list to what is within the detail
+   * distance of where the map is streaming around now. Resolves when it is
+   * so. For starting a run again, and for putting a saved moment back.
+   */
+  reset(detail?: readonly string[]): Promise<void>;
   /**
    * The height of the water's surface over a point, or null where there is
    * none (where full detail is loaded). What makes water more than a
@@ -126,7 +142,11 @@ interface Chunk {
   water: Water[];
   loading: "none" | "far" | "detail";
   showing: "none" | "far" | "detail";
+  /** How many times in a row a file of this chunk has failed to load. */
+  failures: number;
 }
+/** A chunk file that does not load is asked for this many times, then left out: a hole in the world, not a page that never finishes loading. */
+const TRIES = 3;
 /** Milliseconds of set-up per frame while the game plays. */
 const BUDGET = 3;
 
@@ -137,6 +157,8 @@ export async function loadMap(
   url: string,
   options: {
     around: THREE.Vector3;
+    /** A marker to load around first instead, if the map has one of this name (where the player will start). */
+    aroundMarker?: string;
     detailDistance: number;
     viewDistance: number;
     /** How much grass: 1 is the full sward, 0 none (see GRASS in grass.ts for how far it is drawn). */
@@ -349,8 +371,12 @@ export async function loadMap(
     water: [],
     loading: "none",
     showing: "none",
+    failures: 0,
   }));
-  const eye = options.around.clone();
+  const startAt = options.aroundMarker ? manifest.markers.find((marker) => marker.name === options.aroundMarker) : undefined;
+  const eye = startAt ? new THREE.Vector3(-startAt.position[0], startAt.position[1], startAt.position[2]) : options.around.clone();
+  /** Chunks to load in detail wherever the camera is: while `reset` puts a saved moment back. */
+  const forced = new Set<Chunk>();
   let held: THREE.Vector3 | null = null;
   /** Set when the map is taken away: nothing more is loaded, and what arrives late is dropped. */
   let disposed = false;
@@ -442,13 +468,13 @@ export async function loadMap(
         continue;
       }
       // A little slack before giving detail up again, so a chunk at the edge does not flicker.
-      const near = distance <= options.detailDistance || (chunk.showing === "detail" && distance <= options.detailDistance + 8);
+      const near = distance <= options.detailDistance || (chunk.showing === "detail" && distance <= options.detailDistance + 8) || forced.has(chunk);
       const want = near || !chunk.info.lods[1] ? "detail" : "far";
       // The detailed version is kept a while after it stops being shown (walking back is then free), and freed beyond that.
       if (chunk.detail && !busy && chunk.showing === "far" && distance > keepDistance) unload(chunk, "detail");
       const have = want === "detail" ? chunk.detail : chunk.far;
       if (!have) {
-        if (chunk.loading === "none") queue.push({ chunk, want, distance });
+        if (chunk.loading === "none" && chunk.failures < TRIES) queue.push({ chunk, want, distance });
         continue;
       }
       if (chunk.showing !== want) show(chunk, want);
@@ -489,14 +515,18 @@ export async function loadMap(
                 chunk.detailMeshes = meshes;
                 detailChanged = true;
               } else chunk.farMeshes = meshes;
+              chunk.failures = 0;
               done();
             })(),
           );
           if (hurried > 0) settle();
         })
         .catch((error) => {
-          console.error(`Chunk ${chunk.info.id} did not load:`, error);
           done();
+          if (disposed) return;
+          chunk.failures++;
+          if (chunk.failures < TRIES) console.warn(`Chunk ${chunk.info.id} did not load; trying again.`, error);
+          else console.error(`Chunk ${chunk.info.id} did not load after ${TRIES} tries: left out.`, error);
           refresh();
         });
     }
@@ -593,13 +623,44 @@ export async function loadMap(
       held = point ? point.clone() : null;
       refresh();
     },
+    get heldAt() {
+      return held;
+    },
     get shown() {
       return root.visible;
     },
     set shown(on: boolean) {
       root.visible = on;
     },
+    get detail() {
+      return chunks
+        .filter((chunk) => chunk.detail)
+        .map((chunk) => chunk.info.id)
+        .sort();
+    },
+    async reset(detail) {
+      if (disposed) return;
+      const wanted = detail ? new Set(detail) : null;
+      for (const chunk of chunks) {
+        if (!chunk.info.lods[1]) continue; // no far version: always in detail
+        const keep = wanted ? wanted.has(chunk.info.id) : distanceTo(chunk) <= options.detailDistance;
+        if (keep) {
+          if (wanted && !chunk.detail) forced.add(chunk);
+        } else if (chunk.detail && chunk.loading === "none") {
+          if (chunk.showing === "detail") {
+            markStale(chunk.placings);
+            chunk.showing = "none";
+          }
+          unload(chunk, "detail");
+        }
+      }
+      await api.settled();
+      // What was loaded only to be solid again goes back to being shown from afar.
+      forced.clear();
+      await api.settled();
+    },
     settled(hurry = true) {
+      if (disposed) return Promise.resolve(); // nothing more will arrive
       return new Promise((resolve) => {
         idle.push(resolve);
         if (hurry) {

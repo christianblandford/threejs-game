@@ -65,6 +65,11 @@ export function createAudio(camera: THREE.Camera): GameAudio {
 
   const sounds = new Map<string, { voices: THREE.Audio[]; next: number }>();
   function register(name: string, buffer: AudioBuffer): void {
+    // A sound given again under the same name takes the old one's place, and the old one's voices are let go.
+    for (const voice of sounds.get(name)?.voices ?? []) {
+      if (voice.isPlaying) voice.stop();
+      voice.gain.disconnect();
+    }
     const voices = Array.from({ length: VOICES }, () => new THREE.Audio(listener).setBuffer(buffer));
     sounds.set(name, { voices, next: 0 });
   }

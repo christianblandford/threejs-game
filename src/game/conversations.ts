@@ -1,11 +1,12 @@
 import * as THREE from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { disposeObject } from "../engine/dispose";
-import { createDialogue, type Conversation, type Dialogue } from "../engine/dialogue";
+import { createDialogue, type Conversation, type ConversationSnapshot, type Dialogue } from "../engine/dialogue";
 import type { Hud } from "./hud";
 import type { Interact } from "../engine/interact";
 import type { LoadedMap } from "../engine/map";
 import type { Player } from "./player";
+import type { Random } from "../engine/random";
 import { markerPosition, markerYaw } from "../engine/spaces";
 import type { WorldState } from "../engine/worldState";
 
@@ -32,17 +33,25 @@ export interface Conversations {
   update(dt: number, did: { next: boolean; digit: number; step: number }): void;
   /** Ends whatever is being said, as if the talk had run out. */
   end(): void;
+  /** The talk in progress, if any, as plain data; and picking it up again at the same line (or, given null, ending whatever is being said). */
+  snapshot(): TalkSnapshot | null;
+  restore(saved: TalkSnapshot | null): void;
   /** Ends any talk and takes the stand-ins out of the scene. */
   dispose(): void;
+}
+
+export interface TalkSnapshot extends ConversationSnapshot {
+  selected: number;
+  justBegan: boolean;
 }
 
 const STORIES = import.meta.glob<string>("./stories/*.ink", { eager: true, import: "default" });
 /** The stand-in for anyone: the sample fox, sitting. Metres from paws to ear tips. */
 const STAND_IN = { url: "/assets/models/Fox.glb", height: 0.75, idle: "Survey" };
 
-export function createConversations(systems: { state: WorldState; interact: Interact; hud: Hud; player: Player }): Conversations {
+export function createConversations(systems: { state: WorldState; interact: Interact; hud: Hud; player: Player; random: Random }): Conversations {
   const { interact, hud, player } = systems;
-  const dialogue = createDialogue(systems.state);
+  const dialogue = createDialogue(systems.state, () => Math.floor(systems.random.next() * 2 ** 31));
   for (const [path, compiled] of Object.entries(STORIES)) dialogue.add(path.slice(path.lastIndexOf("/") + 1, -".ink".length), compiled);
 
   let talking: Conversation | null = null;
@@ -84,10 +93,19 @@ export function createConversations(systems: { state: WorldState; interact: Inte
       console.warn(`"${person.marker.name}" wants to tell the story "${person.name}", but there is no such file in src/stories/.`);
       return;
     }
+    let begun: Conversation;
+    try {
+      begun = dialogue.start(person.name);
+    } catch (error) {
+      // (A knot that is not in the story, most likely: `talk = "steward#nowhere"`.)
+      console.warn(`"${person.marker.name}" could not tell "${person.name}":`, error);
+      return;
+    }
+    if (begun.ended) return; // the story had nothing to say: nothing to stand still for
     player.frozen = true;
     interact.suspended = true;
     justBegan = true;
-    talking = dialogue.start(person.name);
+    talking = begun;
   });
 
   async function standIn(map: LoadedMap, marker: LoadedMap["manifest"]["markers"][number]): Promise<void> {
@@ -131,6 +149,16 @@ export function createConversations(systems: { state: WorldState; interact: Inte
     },
     end() {
       talking?.end();
+    },
+    snapshot: () => (talking ? { ...talking.snapshot(), selected, justBegan } : null),
+    restore(saved) {
+      talking?.end();
+      if (!saved) return;
+      player.frozen = true;
+      interact.suspended = true;
+      talking = dialogue.resume(saved);
+      ({ selected, justBegan } = saved);
+      show(talking);
     },
     dispose() {
       disposed = true;

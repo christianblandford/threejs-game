@@ -62,6 +62,8 @@ export interface Interact {
   suspended: boolean;
   /** Once a frame: finds what is in reach, and uses it if the key went down. */
   update(feet: THREE.Vector3, camera: THREE.Camera, currentSpace: string, pressed: boolean): void;
+  /** The player was put somewhere (through a door): the zones they now stand in count as entered already, so a walk-in door they arrive inside does not take them straight back. */
+  landed(feet: THREE.Vector3, currentSpace: string): void;
   onFocus: ((usable: Usable | null) => void) | null;
   /** Forgets every usable thing, zone and listener: the game that knew them is gone. */
   clear(): void;
@@ -177,6 +179,10 @@ export function createInteract(): Interact {
         api.onFocus?.(focus);
       }
       if (focus && pressed) for (const handler of handlers.get(focus.kind) ?? []) handler(focus);
+    },
+    landed(feet, currentSpace) {
+      middle.copy(feet).y += 0.3;
+      for (const zone of zones) if (zone.space === currentSpace && within(zone, middle)) zone.inside = true;
     },
     clear() {
       usables.length = 0;

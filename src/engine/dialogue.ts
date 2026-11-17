@@ -58,27 +58,50 @@ export interface Conversation {
   choose(index: number): void;
   /** Walks away mid-conversation. What was said so far is remembered. */
   end(): void;
+  /** The conversation as it stands, as plain data: `Dialogue.resume` picks it up again at the same line. */
+  snapshot(): ConversationSnapshot;
+}
+
+export interface ConversationSnapshot {
+  story: string;
+  /** Ink's own state: where the story has got to, and everything it remembers. */
+  state: string;
+  line: DialogueLine | null;
+  choices: string[];
+  speaker: string | null;
 }
 
 export interface Dialogue {
   /** Adds a compiled story (the default export of an imported `.ink` file) under a name. */
   add(name: string, compiled: string): void;
   has(name: string): boolean;
-  /** Begins "story" or "story#knot". Ends whatever conversation was going on. */
+  /** Begins "story" or "story#knot". Ends whatever conversation was going on. Throws if the story has no such knot. */
   start(target: string): Conversation;
+  /** Picks a conversation up where a snapshot of it was taken. */
+  resume(saved: ConversationSnapshot): Conversation;
   readonly current: Conversation | null;
   /** Called when the line or the choices change, and with null when the conversation ends. */
   onChanged: ((conversation: Conversation | null) => void) | null;
 }
 
-export function createDialogue(state: WorldState): Dialogue {
+/**
+ * `seed` gives a story its dice the first time it is told (Ink's `RANDOM`
+ * and shuffles). Ink would take them from the clock, and they are kept in
+ * the story's memory, so the saved world of two runs alike in every other
+ * way would differ: hand it the game's own dice instead.
+ */
+export function createDialogue(state: WorldState, seed: () => number = () => 0): Dialogue {
   const compiled = new Map<string, string>();
   const memory = state.scope("dialogue");
   let current: Conversation | null = null;
 
-  function start(target: string): Conversation {
-    current?.end();
+  const start = (target: string): Conversation => {
     const [name, knot = "start"] = target.split("#") as [string, string | undefined];
+    return play(name, knot, null);
+  };
+
+  function play(name: string, knot: string, resumed: ConversationSnapshot | null): Conversation {
+    current?.end();
     const source = compiled.get(name);
     if (!source) throw new Error(`No story called "${name}". (Stories are the .ink files the game adds with dialogue.add.)`);
 
@@ -89,23 +112,33 @@ export function createDialogue(state: WorldState): Dialogue {
     story.BindExternalFunction("fact", (key: string) => state.peek(String(key)) ?? false, true);
     story.BindExternalFunction("set_fact", (key: string, value: string | number | boolean) => state.set(String(key), value), false);
 
-    // Pick up what the story remembers from earlier conversations. A story
-    // rewritten since may no longer fit its memory: then it starts afresh.
-    const remembered = memory.get(name, "");
-    if (remembered) {
-      try {
-        story.state.LoadJson(remembered);
-      } catch {
-        console.warn(`Story "${name}" has changed since it was last saved; starting it from the beginning.`);
-        story.ResetState();
-      }
-    }
-    story.ChoosePathString(knot);
-
     let line: DialogueLine | null = null;
     let choices: string[] = [];
     let speaker: string | null = null;
     let ended = false;
+    const fresh = (): void => {
+      story.state.storySeed = seed();
+      story.state.previousRandom = 0;
+    };
+    if (resumed) {
+      story.state.LoadJson(resumed.state);
+      ({ line, choices, speaker } = structuredClone({ line: resumed.line, choices: resumed.choices, speaker: resumed.speaker }));
+    } else {
+      // Pick up what the story remembers from earlier conversations. A story
+      // rewritten since may no longer fit its memory: then it starts afresh.
+      const remembered = memory.get(name, "");
+      if (!remembered) fresh();
+      else {
+        try {
+          story.state.LoadJson(remembered);
+        } catch {
+          console.warn(`Story "${name}" has changed since it was last saved; starting it from the beginning.`);
+          story.ResetState();
+          fresh();
+        }
+      }
+      story.ChoosePathString(knot);
+    }
     const remember = (): void => memory.set(name, story.state.ToJson());
 
     function end(): void {
@@ -164,9 +197,11 @@ export function createDialogue(state: WorldState): Dialogue {
         advance();
       },
       end,
+      snapshot: () => structuredClone({ story: name, state: story.state.ToJson(), line, choices, speaker }),
     };
     current = conversation;
-    advance();
+    if (resumed) api.onChanged?.(conversation);
+    else advance();
     return conversation;
   }
 
@@ -174,6 +209,7 @@ export function createDialogue(state: WorldState): Dialogue {
     add: (name, story) => void compiled.set(name, story),
     has: (name) => compiled.has(name),
     start,
+    resume: (saved) => play(saved.story, "start", saved),
     get current() {
       return current;
     },

@@ -7,10 +7,10 @@ import { navBox } from "../engine/navigation";
 import { activeQuality, numberOf, params } from "../engine/params";
 import { getSettings, QUALITY } from "../engine/settings";
 import { createSimulation, TICK, type Frame, type Simulation } from "../engine/simulation";
-import { createSpaces, markerYaw, type Spaces } from "../engine/spaces";
+import { createSpaces, markerYaw, type Spaces, type Way } from "../engine/spaces";
 import type { StateValue } from "../engine/worldState";
 import { addControls } from "./controls";
-import { createConversations, type Conversations } from "./conversations";
+import { createConversations, type Conversations, type TalkSnapshot } from "./conversations";
 import { addFeedback } from "./feedback";
 import { createFlyCamera, type FlyCamera } from "./flyCamera";
 import { createGate, type Gate, type GateSnapshot } from "./gate";
@@ -48,8 +48,10 @@ export interface Game {
   readonly simulation: Simulation;
   /** A frame of the display, given the time since the last (seconds): runs the ticks that are due and draws. Behind a menu the world stands still. */
   update(seconds: number): void;
-  /** What only needs doing once a frame, wherever the camera is: streaming, building where characters can walk, particles. */
+  /** What only needs doing once a frame, given the point the world is loaded around: streaming, building where characters can walk, particles. */
   advance(seconds: number, eye: THREE.Vector3): void;
+  /** The point the world is loaded around: the player (flying, the camera). */
+  focus(): THREE.Vector3;
   /** Resolves when the world around the player is loaded and still: nothing arriving, no door being gone through, the walkable area built. */
   ready(): Promise<void>;
   /** The state of play as plain data, for reading and comparing: rounded, and named for people. */
@@ -86,6 +88,13 @@ export interface GameSnapshot {
   npcs: NpcSnapshot;
   gate: GateSnapshot | null;
   world: Record<string, StateValue>;
+  /** The conversation going on, at the line it has reached. */
+  talk: TalkSnapshot | null;
+  /** The way back out of each place that was walked into. */
+  ways: Record<string, Way>;
+  /** Where the level is solid: its chunks loaded in detail, and the point it is held around while the player is indoors. */
+  detail: string[];
+  held: [number, number, number] | null;
 }
 
 /** How fast the gamepad's right stick turns the view (radians a second at full tilt). */
@@ -104,6 +113,7 @@ export async function createGame(engine: Engine, level: LevelInfo, reuse: { map?
     reuse.map ??
     (await loadMap(renderer, level.map, {
       around,
+      aroundMarker: "spawn",
       // `?detail=` and `?view=` set how far full detail and anything at all reach (m): small values show the streaming at work.
       detailDistance: numberOf("detail", 80),
       viewDistance: numberOf("view", 400),
@@ -119,7 +129,12 @@ export async function createGame(engine: Engine, level: LevelInfo, reuse: { map?
   map.shown = true;
   map.hold(null);
   map.update(spawn);
-  await map.settled(); // the ground must be there before anything stands on it
+  // The ground must be there before anything stands on it; and only what is
+  // near: a map kept from the game before this one still holds what that
+  // game's player walked past, and a run must not start from another's leavings.
+  await map.reset();
+  // The walkable area is built nearest this point first.
+  navigation.update(0, spawn);
 
   // --- The player ----------------------------------------------------------------
   /** The water's surface where the player is: asked of the place they are in, once places exist (below). */
@@ -129,7 +144,7 @@ export async function createGame(engine: Engine, level: LevelInfo, reuse: { map?
 
   // --- People, places and things ---------------------------------------------------
   const hud = createHud();
-  const conversations = createConversations({ state, interact, hud, player });
+  const conversations = createConversations({ state, interact, hud, player, random });
   const spaces = createSpaces({
     home: { id: level.id, map },
     interact,
@@ -172,7 +187,10 @@ export async function createGame(engine: Engine, level: LevelInfo, reuse: { map?
 
   // --- Starting, saving, menus ---------------------------------------------------
   const saving = createSaving({ state, level, map, spaces, player });
+  /** True while a saved moment is being put back: going where it was is not an arrival to write down. */
+  let restoring = false;
   spaces.onTravelled = () => {
+    if (restoring) return;
     saving.save();
     audio.play("land", { volume: 0.5, playbackRate: 0.7 });
   };
@@ -181,16 +199,30 @@ export async function createGame(engine: Engine, level: LevelInfo, reuse: { map?
   const fly = createFlyCamera(camera, params.has("fly"));
   /** The prompt on screen, to change it only when it changes. */
   let offered: string | null = null;
-  const removeControls = addControls({ engine, menu, player, hud, fly, onLeftPlay: () => hud.prompt((offered = null)) });
+  /** Steps of the wheel since the last tick. */
+  let wheel = 0;
+  const removeControls = addControls({ engine, menu, player, hud, fly, onZoom: (steps) => (wheel += steps), onLeftPlay: () => hud.prompt((offered = null)) });
+
+  /**
+   * What the world is loaded around: the player, not the camera. The camera
+   * eases to its place by the screen's clock; what is loaded (so what is
+   * solid, and the order the walkable area is built in) must not go by
+   * that, or the same run comes out differently. Flying, it is the camera:
+   * there is nothing else to go by.
+   */
+  const focus = (): THREE.Vector3 => (fly.active ? camera.position : player.position);
 
   // --- A tick ----------------------------------------------------------------------
   /** The whole of what happens in a sixtieth of a second, from one frame of input. Nothing in here may look at the clock or at `Math.random()`. */
   function tick(frame: Frame, index: number): void {
     const pressed = (action: string): boolean => frame.actions.includes(action);
     const digit = Number(frame.actions.find((action) => action.startsWith("answer"))?.slice("answer".length) ?? 0);
+    // Whatever arrived or was put somewhere since the last tick is solid from this one on.
+    physics.refresh();
     // The view is where this tick's input says it is, and the camera exactly there: what can be used is judged from it.
     player.setLook(frame.look[0], frame.look[1]);
-    player.present(0, 1);
+    if (frame.zoom) player.zoom(frame.zoom);
+    if (!fly.active) player.aim();
     // Space answers in a conversation; it is a jump only when nobody is talking.
     const busy = conversations.talking || spaces.travelling;
     const jumping = pressed("jump") && !busy;
@@ -201,18 +233,19 @@ export async function createGame(engine: Engine, level: LevelInfo, reuse: { map?
     player.frozen = busy;
     player.simulate(TICK, { move: { x: frame.move[0], y: frame.move[1] }, run: frame.run, jump: jumping });
     physics.step(TICK);
-    navigation.update(TICK, camera.position);
+    navigation.update(TICK, focus());
     npcs.update(TICK);
     if ((index + 1) % SAVE_EVERY === 0) saving.save();
   }
 
   /** What was pressed since the last tick. A press is not lost when a frame runs no tick, nor counted twice when it runs two. */
   const latched = new Set<string>();
-  const idle = (): Frame => ({ move: [0, 0], run: false, actions: [], look: [player.yaw, player.pitch] });
+  const idle = (): Frame => ({ move: [0, 0], run: false, actions: [], look: [player.yaw, player.pitch], zoom: 0 });
   /** This tick's input, from the keyboard, mouse and gamepad. */
   function devices(): Frame {
-    const frame: Frame = { move: fly.active ? [0, 0] : [input.move.x, input.move.y], run: !fly.active && input.isDown("sprint"), actions: fly.active ? [] : [...latched], look: [player.yaw, player.pitch] };
+    const frame: Frame = { move: fly.active ? [0, 0] : [input.move.x, input.move.y], run: !fly.active && input.isDown("sprint"), actions: fly.active ? [] : [...latched], look: [player.yaw, player.pitch], zoom: fly.active ? 0 : wheel };
     latched.clear();
+    wheel = 0;
     return frame;
   }
 
@@ -220,24 +253,24 @@ export async function createGame(engine: Engine, level: LevelInfo, reuse: { map?
     const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
     for (;;) {
       while (spaces.travelling) await pause(30);
-      // What is loaded follows the camera, and the camera may not have been drawn since the player last moved.
-      if (!fly.active) player.present(0, 1);
-      spaces.update(camera.position);
+      spaces.update(focus());
       await spaces.map(spaces.current)?.settled();
-      while (navigation.busy) {
-        navigation.update(0, camera.position);
-        await pause(15);
-      }
+      navigation.update(0, focus());
+      await navigation.settled();
       if (!spaces.travelling) return;
     }
   }
 
+  /** False until the world around the start has finished arriving: the frame loop's first tick, like a stepped one, finds the ground and the walkable area there. */
+  let begun = false;
   const simulation = createSimulation({
     tick,
     idle,
-    blocked: () => menu.state !== "playing" || spaces.travelling,
+    blocked: () => !begun || menu.state !== "playing" || spaces.travelling,
     settle: ready,
   });
+  // (Not for ever: a world that will not settle should still be playable.)
+  void Promise.race([ready(), new Promise((resolve) => setTimeout(resolve, 8000))]).then(() => (begun = true));
 
   // --- A frame ---------------------------------------------------------------------
   function advance(seconds: number, eye: THREE.Vector3): void {
@@ -259,6 +292,7 @@ export async function createGame(engine: Engine, level: LevelInfo, reuse: { map?
     turned.pitch -= input.lookStick.y * stick * (getSettings().invertY ? -1 : 1);
     if (!live) {
       latched.clear();
+      wheel = 0;
       // The keys and the pad are the menu's.
       menu.steer({
         move: Number(input.wasPadPressed(PAD.down)) - Number(input.wasPadPressed(PAD.up)),
@@ -286,7 +320,7 @@ export async function createGame(engine: Engine, level: LevelInfo, reuse: { map?
     // Asked every frame, not on a change of focus: using a thing may change what it offers.
     const offer = live && !fly.active ? interact.focus?.prompt ?? null : null;
     if (offer !== offered) hud.prompt((offered = offer));
-    advance(seconds, camera.position);
+    advance(seconds, focus());
   }
 
   let disposed = false;
@@ -305,6 +339,7 @@ export async function createGame(engine: Engine, level: LevelInfo, reuse: { map?
     simulation,
     update,
     advance,
+    focus,
     ready,
     state: () => ({
       tick: simulation.tick,
@@ -322,22 +357,52 @@ export async function createGame(engine: Engine, level: LevelInfo, reuse: { map?
       const own = player.snapshot();
       const origin = spaces.origin(spaces.current);
       own.position = [own.position[0] - origin.x, own.position[1] - origin.y, own.position[2] - origin.z];
-      return { tick: simulation.tick, random: random.state, walkRandom: navigation.randomState, space: spaces.current, player: own, npcs: npcs.snapshot(), gate: gate?.snapshot() ?? null, world: state.snapshot() };
+      return {
+        tick: simulation.tick,
+        random: random.state,
+        walkRandom: navigation.randomState,
+        space: spaces.current,
+        player: own,
+        npcs: npcs.snapshot(),
+        gate: gate?.snapshot() ?? null,
+        world: state.snapshot(),
+        talk: conversations.snapshot(),
+        ways: spaces.ways(),
+        detail: map.detail,
+        held: map.heldAt ? [map.heldAt.x, map.heldAt.y, map.heldAt.z] : null,
+      };
     },
     async restore(saved) {
+      // Nothing is changed before it is known that all of it can be.
+      if (saved.space !== level.id && !level.interiors.some((interior) => interior.id === saved.space)) throw new Error(`The snapshot is of "${saved.space}", a place this level does not have.`);
+      // A door being gone through is gone through first: the trip would otherwise finish on top of what is put back.
+      await ready();
       conversations.end();
       state.restore(saved.world);
       const feet = new THREE.Vector3(...saved.player.position);
-      if (saved.space !== spaces.current) await spaces.travel(saved.space, { position: feet, yaw: saved.player.yaw });
-      const origin = spaces.origin(saved.space);
-      feet.add(origin);
+      restoring = true;
+      try {
+        if (saved.space !== spaces.current) await spaces.travel(saved.space, { position: feet, yaw: saved.player.yaw });
+      } finally {
+        restoring = false;
+      }
+      spaces.setWays(saved.ways);
+      feet.add(spaces.origin(saved.space));
+      // The level, solid exactly where it was then.
+      if (saved.space === level.id) map.update(feet);
+      else if (saved.held) map.hold(new THREE.Vector3(...saved.held));
+      await map.reset(saved.detail);
       const here = spaces.map(saved.space);
       here?.update(feet);
       await here?.settled();
       player.restore({ ...saved.player, position: feet.toArray() });
+      // Where characters can walk follows from what is solid: wait for it before standing them on it.
+      await ready();
       npcs.restore(saved.npcs);
       if (saved.gate) gate?.restore(saved.gate);
       interactions.sync();
+      conversations.restore(saved.talk);
+      // Last: nothing above may have thrown the dice since.
       random.state = saved.random;
       navigation.randomState = saved.walkRandom;
       simulation.rewind(saved.tick);

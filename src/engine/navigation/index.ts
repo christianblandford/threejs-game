@@ -292,7 +292,6 @@ export async function createNavigation(options: NavigationOptions = {}): Promise
       if (!tile) break;
       buildTile(job, tile);
     } while (performance.now() < deadline);
-    for (const agent of agents) agent.recover(); // there may be ground now under agents that had none
     if (job.queue.length === 0) finishJob();
   }
   function freeJob(): void {
@@ -302,6 +301,11 @@ export async function createNavigation(options: NavigationOptions = {}): Promise
   function finishJob(): void {
     freeJob();
     ready = true;
+    // There may be ground now under agents that had none. Only once the
+    // whole of it is there, not as each batch of tiles lands: how many tiles
+    // a batch holds goes by the clock, and an agent put onto the nearest
+    // ground while its own tile is still to come ends up somewhere else.
+    for (const agent of agents) agent.recover();
     refreshDebugMesh();
     api.onRebuilt?.();
     if (requested) return; // a newer request is waiting its turn
@@ -468,7 +472,16 @@ export async function createNavigation(options: NavigationOptions = {}): Promise
     get busy() {
       return job !== null || requested !== null;
     },
-    reseed: (seed) => Recast.setRandomSeed(seed),
+    async settled() {
+      while (job !== null || requested !== null) {
+        work(OFFSCREEN_BUDGET);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+    },
+    reseed(seed) {
+      Recast.setRandomSeed(seed);
+      frame = 0; // a run starts counting from its own first tick
+    },
     get randomState() {
       return Recast.getRandomSeed();
     },

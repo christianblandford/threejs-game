@@ -30,6 +30,8 @@ export interface Frame {
   actions: string[];
   /** Where the view is turned: heading and pitch (radians). */
   look: [number, number];
+  /** Steps of the wheel since the last tick: positive is out. */
+  zoom: number;
 }
 
 export interface Simulation {
@@ -51,6 +53,13 @@ export interface Simulation {
   readonly pending: number;
   /** Every tick's input since the start: with the seed, the whole run. */
   readonly recorded: readonly Frame[];
+  /**
+   * How many of those ticks the frame loop ran, and not `step`. Such a tick
+   * does not wait for the world to finish loading around the player (play
+   * must not stall for a chunk), so what had arrived by then went by the
+   * clock: a run with any of them may not play again exactly.
+   */
+  readonly live: number;
   /** Back to tick 0 with nothing recorded or waiting. */
   reset(): void;
   /** The clock put back to an earlier tick (a snapshot was restored): what was recorded after it is dropped. */
@@ -74,6 +83,7 @@ export function createSimulation(hooks: SimulationHooks): Simulation {
   let alpha = 1;
   const waiting: Frame[] = [];
   const recorded: Frame[] = [];
+  let live = 0;
 
   function run(frame: Frame): void {
     recorded.push(frame);
@@ -93,6 +103,9 @@ export function createSimulation(hooks: SimulationHooks): Simulation {
       return waiting.length;
     },
     recorded,
+    get live() {
+      return live;
+    },
     advance(seconds, devices) {
       if (simulation.held || hooks.blocked()) {
         // Time that passes while the world stands still is not owed to it afterwards.
@@ -104,6 +117,7 @@ export function createSimulation(hooks: SimulationHooks): Simulation {
       let ran = 0;
       while (owed >= TICK && ran < MOST_PER_FRAME) {
         run(waiting.shift() ?? devices());
+        live++;
         owed -= TICK;
         ran++;
         if (hooks.blocked()) {
@@ -133,6 +147,7 @@ export function createSimulation(hooks: SimulationHooks): Simulation {
           // What is pressed is pressed once, on the first of the ticks: held for sixty ticks, "jump" is still one jump.
           actions: i === 0 ? [...(frame.actions ?? [])] : [],
           look: frame.look ? [frame.look[0], frame.look[1]] : [waiting.at(-1)?.look[0] ?? idle.look[0], waiting.at(-1)?.look[1] ?? idle.look[1]],
+          zoom: i === 0 ? frame.zoom ?? 0 : 0,
         });
       }
     },
@@ -144,7 +159,7 @@ export function createSimulation(hooks: SimulationHooks): Simulation {
       recorded.length = Math.min(recorded.length, to);
     },
     queue(frames) {
-      for (const frame of frames) waiting.push({ move: [frame.move[0], frame.move[1]], run: frame.run, actions: [...frame.actions], look: [frame.look[0], frame.look[1]] });
+      for (const frame of frames) waiting.push({ move: [frame.move[0], frame.move[1]], run: frame.run, actions: [...frame.actions], look: [frame.look[0], frame.look[1]], zoom: frame.zoom ?? 0 });
     },
     reset() {
       tick = 0;
@@ -152,6 +167,7 @@ export function createSimulation(hooks: SimulationHooks): Simulation {
       alpha = 1;
       waiting.length = 0;
       recorded.length = 0;
+      live = 0;
     },
   };
   return simulation;

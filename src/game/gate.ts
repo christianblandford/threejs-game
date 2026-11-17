@@ -71,6 +71,7 @@ export function createGate(systems: {
   const turn = new THREE.Quaternion().setFromEuler(gate.rotation);
   const body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(gate.position.x, gate.position.y, gate.position.z).setRotation(turn));
   world.createCollider(RAPIER.ColliderDesc.cuboid(width / 2, height / 2, 0.15), body);
+  physics.changed();
   // Where the gate stands when it is down: what navigation is given to walk around.
   const closed = { centre: new THREE.Vector3(ground.x, closedY, ground.z), half: new THREE.Vector3(width / 2, height / 2, 0.15), rotation: turn };
   if (target === 0) systems.block?.(closed);
@@ -122,11 +123,13 @@ export function createGate(systems: {
       gate.position.y = closedY + raised;
       body.setTranslation({ x: gate.position.x, y: gate.position.y, z: gate.position.z }, true);
       body.setNextKinematicTranslation({ x: gate.position.x, y: gate.position.y, z: gate.position.z });
+      physics.changed();
       for (const handle of handles) handle.rotation.x = target === 0 ? 0.6 : -0.6;
       settle();
     },
     dispose() {
       world.removeRigidBody(body);
+      physics.changed();
       gate.removeFromParent();
       gate.geometry.dispose();
       for (const post of posts) {

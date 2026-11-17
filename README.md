@@ -165,7 +165,7 @@ game.input.press("jump");
 await game.time.step(60);
 game.state.get("player.position");     // plain data
 game.state.hash();                     // the same for the same run, every time
-const run = game.input.recording();    // { seed, level, frames }
+const run = game.input.recording();    // { seed, level, frames, exact }
 await game.input.replay(run);          // from the start again: same hash
 const shot = await game.capture.screenshot({ width: 640, height: 400 });
 ```
@@ -174,21 +174,43 @@ Also `game.state.snapshot()` and `restore()`, `game.state.diff(a, b)`,
 `game.time.pause()`, `resume()` and `runTo(tick)`, `game.input.send(frame,
 ticks)` and `look(yaw, pitch)`, `game.sounds()` and `game.logs()`.
 
-Measured: a scripted run of 372 ticks (walking, turning, a jump) gives
-the same hash from a fresh page load, after `time.restart()`, and
-replayed from its recording, with no value differing; another seed moves
-only the foxes. The gate's lever, the door into the hall and the
-steward's conversation all work through it. 120 ticks step in about half
-a second. Two limits, both stated in the code: a restored snapshot puts
-the player and the world back exactly but the foxes only where they were
-and heading where they were going (their paths are found afresh, so they
-may be centimetres off after it; a replay from the start is exact), and
-a conversation in progress is not kept.
+Measured: a scripted run of 801 ticks (down the road at a run, a jump,
+the wheel, into first person, through the gate, the door into the hall,
+the steward's conversation and an answer) gives the same hash from a
+fresh page and after each of four `time.restart()`s, and a 550-tick run
+the same from six replays of its recording; another seed gives another.
+120 ticks step in about half a second.
 
-The rule that keeps it true: nothing in a tick (`tick` in
-`src/game/scene.ts`, and everything it calls) reads the clock or
-`Math.random()`. What is only seen or heard (the legs' animation, the
-pitch of a sound) may.
+Two limits:
+
+- **Only a stepped run is exact.** A tick that `step` runs waits for the
+  world to finish loading around the player; a tick the frame loop runs
+  (somebody playing) does not, because play must not stall for a chunk,
+  so what had arrived by then went by the clock. A recording says which
+  it is (`exact`); one with live ticks plays again closely, not to the
+  same hash.
+- **A restored snapshot is exact but for the foxes.** The player, the
+  saved world, the conversation at its line, the way back out of each
+  room and where the level is solid all come back as they were. The
+  foxes come back where they were, heading where they were going, but
+  from a standstill and on paths found afresh: centimetres off for a
+  moment. A replay from the start has no such drift.
+
+The rules that keep it true, each of which was broken once and found by
+running the same inputs twice (`docs/lessons.md` has the stories):
+
+- Nothing in a tick (`tick` in `src/game/scene.ts`, and everything it
+  calls) reads the clock or `Math.random()`. What is only seen or heard
+  (the legs' animation, the pitch of a sound) may.
+- Input reaches the game only through a tick's frame: the wheel is in it
+  like the keys.
+- The world is loaded around the player, not the camera. The camera
+  eases to its place by the screen's clock; what is loaded decides what
+  is solid.
+- A run starts from a world that owes nothing to the run before it: the
+  map is trimmed to what is near the start, and nobody is stood on the
+  walkable area until it has been rebuilt for that.
+- Things are made in a fixed order, not as their files finish loading.
 
 ### Saving a file puts the game together again
 

@@ -113,59 +113,64 @@ export async function createNpcs(options: NpcOptions): Promise<Npcs> {
   const { parent, navigation, physics, around, count = 3, player, random } = options;
   const loader = new GLTFLoader();
 
-  const npcs = await Promise.all(
-    Array.from({ length: count }, async (_, i): Promise<Npc> => {
-      const gltf = await loader.loadAsync(MODEL.url);
-      const model = gltf.scene;
-      // Scale by the model's measured height and stand its lowest point on the ground.
-      const bounds = new THREE.Box3().setFromObject(model);
-      const scale = MODEL.height / (bounds.max.y - bounds.min.y);
-      model.scale.setScalar(scale);
-      model.position.y = -bounds.min.y * scale;
-      model.traverse((object) => {
-        object.castShadow = true;
-        object.receiveShadow = true;
-        object.frustumCulled = false; // a skinned mesh's bounds are its rest pose
-      });
-      const root = new THREE.Group();
-      root.name = `npc-${i}`;
-      root.add(model);
-      parent.add(root);
+  const models = await Promise.all(Array.from({ length: count }, () => loader.loadAsync(MODEL.url)));
+  // Stood on the walkable world as it is now, not as it was: it may be in
+  // the middle of being rebuilt (a game put together again on a map that
+  // stayed loaded), and an agent set down on ground that is about to go is
+  // not the agent it would have been.
+  await navigation.settled();
+  // One after another, in order: which agent is which to the crowd must not
+  // depend on whose model finished loading first.
+  const npcs = models.map((gltf, i): Npc => {
+    const model = gltf.scene;
+    // Scale by the model's measured height and stand its lowest point on the ground.
+    const bounds = new THREE.Box3().setFromObject(model);
+    const scale = MODEL.height / (bounds.max.y - bounds.min.y);
+    model.scale.setScalar(scale);
+    model.position.y = -bounds.min.y * scale;
+    model.traverse((object) => {
+      object.castShadow = true;
+      object.receiveShadow = true;
+      object.frustumCulled = false; // a skinned mesh's bounds are its rest pose
+    });
+    const root = new THREE.Group();
+    root.name = `npc-${i}`;
+    root.add(model);
+    parent.add(root);
 
-      // All three clips play all the time; only their weights change.
-      const mixer = new THREE.AnimationMixer(model);
-      const clip = (name: string, weight: number): Clip => {
-        const found = THREE.AnimationClip.findByName(gltf.animations, name);
-        const action = found ? mixer.clipAction(found) : null;
-        action?.play();
-        action?.setEffectiveWeight(weight);
-        return { action, weight };
-      };
+    // All three clips play all the time; only their weights change.
+    const mixer = new THREE.AnimationMixer(model);
+    const clip = (name: string, weight: number): Clip => {
+      const found = THREE.AnimationClip.findByName(gltf.animations, name);
+      const action = found ? mixer.clipAction(found) : null;
+      action?.play();
+      action?.setEffectiveWeight(weight);
+      return { action, weight };
+    };
 
-      const angle = (i / count) * Math.PI * 2;
-      const start = around.clone().add(new THREE.Vector3(Math.cos(angle) * 2.5, 0, Math.sin(angle) * 2.5));
-      const agent = navigation.addAgent(start, { speed: WANDER_SPEED });
-      root.position.copy(agent.position);
-      root.rotation.y = angle;
-      return {
-        agent,
-        root,
-        mixer,
-        scale,
-        idle: clip(MODEL.clips.idle, 1),
-        walk: clip(MODEL.clips.walk, 0),
-        run: clip(MODEL.clips.run, 0),
-        wait: 0,
-        visiting: false,
-        from: root.position.clone(),
-        to: root.position.clone(),
-        headingFrom: angle,
-        heading: angle,
-        goal: null,
-      };
-    }),
-  );
-  // Not all at once. (Drawn here, in order, and not as each model happens to finish loading.)
+    const angle = (i / count) * Math.PI * 2;
+    const start = around.clone().add(new THREE.Vector3(Math.cos(angle) * 2.5, 0, Math.sin(angle) * 2.5));
+    const agent = navigation.addAgent(start, { speed: WANDER_SPEED });
+    root.position.copy(agent.position);
+    root.rotation.y = angle;
+    return {
+      agent,
+      root,
+      mixer,
+      scale,
+      idle: clip(MODEL.clips.idle, 1),
+      walk: clip(MODEL.clips.walk, 0),
+      run: clip(MODEL.clips.run, 0),
+      wait: 0,
+      visiting: false,
+      from: root.position.clone(),
+      to: root.position.clone(),
+      headingFrom: angle,
+      heading: angle,
+      goal: null,
+    };
+  });
+  // Not all at once.
   for (const npc of npcs) npc.wait = 1 + random.next() * DECISION_TIME;
 
   // The player is not moved by the crowd, but the foxes should still walk
