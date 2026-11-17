@@ -147,10 +147,81 @@ interface Batch {
   count: number;
   meshes: THREE.InstancedMesh[];
 }
+/**
+ * The layer a chunk's shadow-only mesh is on. The cameras that draw the
+ * shadow maps must see it (`camera.layers.enable(SHADOW_LAYER)`); the
+ * player's camera must not, and by default does not.
+ */
+export const SHADOW_LAYER = 1;
+/** A pooled prop smaller than this (m, the radius of the ball around it) casts no shadow: a sign's bracket, a lamp's glass. */
+const SMALLEST_CASTER = 0.5;
+let shadowOnly: THREE.Material | null = null;
+
+/**
+ * One mesh holding every solid shadow caster of a chunk, drawn only into
+ * the shadow maps.
+ *
+ * A chunk's buildings arrive as five or six meshes, one per material, and
+ * each was drawn again into every shadow cascade that reaches it: 750 of
+ * the frame's 1,000 draw calls were shadows, 8 ms of script a frame. A
+ * shadow map holds depth and nothing else, so what a thing is made of does
+ * not matter to it. Merged, a chunk is one draw per cascade.
+ */
+function* shadowProxy(scene: THREE.Group, casters: THREE.Mesh[]): Generator<void, THREE.Mesh | null> {
+  let vertexCount = 0;
+  let indexCount = 0;
+  for (const mesh of casters) {
+    const position = mesh.geometry.attributes.position;
+    if (!position) continue;
+    vertexCount += position.count;
+    indexCount += mesh.geometry.index ? mesh.geometry.index.count : position.count;
+  }
+  if (indexCount === 0) return null;
+  const positions = new Float32Array(vertexCount * 3);
+  const indices = new Uint32Array(indexCount);
+  const toScene = new THREE.Matrix4().copy(scene.matrixWorld).invert();
+  const placed = new THREE.Matrix4();
+  const point = new THREE.Vector3();
+  let vertex = 0;
+  let index = 0;
+  for (const mesh of casters) {
+    const position = mesh.geometry.attributes.position as THREE.BufferAttribute | undefined;
+    if (!position) continue;
+    placed.multiplyMatrices(toScene, mesh.matrixWorld);
+    for (let i = 0; i < position.count; i++) {
+      point.fromBufferAttribute(position, i).applyMatrix4(placed);
+      positions[(vertex + i) * 3] = point.x;
+      positions[(vertex + i) * 3 + 1] = point.y;
+      positions[(vertex + i) * 3 + 2] = point.z;
+    }
+    const own = mesh.geometry.index;
+    if (own) for (let i = 0; i < own.count; i++) indices[index++] = own.getX(i) + vertex;
+    else for (let i = 0; i < position.count; i++) indices[index++] = vertex + i;
+    vertex += position.count;
+    yield;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  geometry.computeBoundingSphere();
+  geometry.computeBoundingBox();
+  // Both faces: some of what is merged was mirrored into place, and depth does not care which way a triangle is wound.
+  shadowOnly ??= new THREE.MeshBasicNodeMaterial({ side: THREE.DoubleSide });
+  const proxy = new THREE.Mesh(geometry, shadowOnly);
+  proxy.name = "shadow";
+  proxy.castShadow = true;
+  proxy.receiveShadow = false;
+  proxy.matrixAutoUpdate = false;
+  proxy.layers.set(SHADOW_LAYER);
+  return proxy;
+}
+
 /** What `sort` found in a file. */
 interface Sorted {
   /** What is drawn. */
   meshes: THREE.Mesh[];
+  /** What casts a shadow through the chunk's one shadow-only mesh instead of by itself. */
+  casters: THREE.Mesh[];
   /** What needs a collider from its own triangles. */
   solid: THREE.Mesh[];
   /** Placings of pooled meshes, for their simple colliders. */
@@ -334,7 +405,7 @@ export async function loadMap(
     scene.position.add(origin);
     scene.updateMatrixWorld(true);
     const remove: THREE.Object3D[] = [];
-    const found: Sorted = { meshes: [], solid: [], placed: [], grounds: [], waters: [] };
+    const found: Sorted = { meshes: [], casters: [], solid: [], placed: [], grounds: [], waters: [] };
     scene.traverse((object) => {
       const extras = object.userData as Extras;
       if (extras.mesh_id) {
@@ -365,6 +436,12 @@ export async function loadMap(
         return;
       }
       mesh.castShadow = detail && !isWater && own.shadows !== false && own.shadows !== 0;
+      // Solid things cast through the chunk's merged shadow mesh. What is cut out by its texture, or moved by the wind, still casts for itself.
+      const material = mesh.material as THREE.Material & { positionNode?: unknown };
+      if (mesh.castShadow && !Array.isArray(mesh.material) && !material.alphaTest && !material.transparent && !material.positionNode) {
+        mesh.castShadow = false;
+        found.casters.push(mesh);
+      }
       mesh.receiveShadow = !isWater;
       mesh.matrixAutoUpdate = false; // nothing in a map moves
       found.meshes.push(mesh);
@@ -397,6 +474,20 @@ export async function loadMap(
         into.nav.push(navSource(triangles.vertices, triangles.indices));
       });
       yield;
+    }
+    if (found.casters.length > 0) {
+      const merging = shadowProxy(scene, found.casters);
+      for (;;) {
+        const step = timed("chunk: shadow mesh", () => merging.next());
+        if (step.done) {
+          if (step.value) {
+            scene.add(step.value);
+            found.meshes.push(step.value); // freed with the chunk's other meshes
+          }
+          break;
+        }
+        yield;
+      }
     }
     timed("chunk: prop colliders", () => {
       for (const prop of found.placed) collide(prop.id, prop.matrix, prop.extras, into);
@@ -469,7 +560,8 @@ export async function loadMap(
         mesh.count = matrices.length;
         mesh.instanceMatrix.needsUpdate = true;
         mesh.visible = matrices.length > 0;
-        mesh.castShadow = casts;
+        if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+        mesh.castShadow = casts && mesh.geometry.boundingSphere!.radius >= SMALLEST_CASTER;
         mesh.boundingSphere = null; // worked out again from the placings it has now
         if (matrices.length > 0) mesh.computeBoundingSphere();
       }

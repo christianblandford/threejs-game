@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { add, convertToTexture, diffuseColor, float, luminance, mrt, normalView, output, packNormalToRGB, pass, sample, screenUV, smoothstep, unpackRGBToNormal, vec3, vec4, velocity } from "three/tsl";
+import { add, diffuseColor, float, luminance, mrt, normalView, output, packNormalToRGB, pass, rtt, sample, screenUV, smoothstep, unpackRGBToNormal, vec3, vec4, velocity } from "three/tsl";
 import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
 import { CSMShadowNode } from "three/addons/csm/CSMShadowNode.js";
 import { DynamicLighting } from "three/addons/lighting/DynamicLighting.js";
@@ -19,13 +19,14 @@ import { createGate } from "./gate";
 import { createHud } from "./hud";
 import { Input, PAD } from "./input";
 import { createInteract } from "./interact";
-import { loadMap, type LoadedMap } from "./map";
+import { SHADOW_LAYER, loadMap, type LoadedMap } from "./map";
 import { createMenu } from "./menu";
 import { createNavigation, navBox, type NavSource } from "./navigation";
 import { createNpcs } from "./npcs";
 import { perf } from "./perf";
 import { createPhysics } from "./physics";
 import { createPlayer } from "./player";
+import { createResolutionGovernor } from "./resolution";
 import { getSettings, onSettingsChanged, QUALITY, type QualityLevel } from "./settings";
 import { createSpaces, markerYaw } from "./spaces";
 import { createWorldState } from "./worldState";
@@ -444,8 +445,8 @@ function compose(level: QualityLevel): void {
     // the wall, as much as a sunlit surface that size would.
     const bounce = made(ssgi(vec4(colour.rgb.min(Number(params.get("giSourceLimit") ?? 2)), 1), depth, normals(), camera));
     // The effect samples at random; what settles the result is the smoothing
-    // further down and temporal anti-aliasing. Two slices of six steps is
-    // enough with both (the README has the measurements).
+    // further down and temporal anti-aliasing. With both, one slice of eight
+    // steps is enough (settings.ts and the README have the measurements).
     bounce.sliceCount.value = Number(params.get("giSlices") ?? (preset.slices || 2));
     bounce.stepCount.value = Number(params.get("giSteps") ?? (preset.steps || 6));
     bounce.radius.value = 8;
@@ -453,19 +454,26 @@ function compose(level: QualityLevel): void {
     bounce.aoIntensity.value = Number(params.get("broadStrength") ?? 1);
     bounce.thickness.value = 0.6;
     bounce.useTemporalFiltering = on("traa") && on("giTemporal");
-    // At about half the canvas each way: it is the dearest thing in the frame, and what it adds is soft.
-    bounce.resolutionScale = Number(params.get("giScale") ?? 0.5);
+    // At well under half the canvas each way: it is the dearest effect in the frame, and what it adds is soft.
+    bounce.resolutionScale = Number(params.get("giScale") ?? (preset.bounceScale || 0.5));
     // What comes out is grainy: a few random samples per pixel. Temporal
     // anti-aliasing averages most of it away on textured surfaces, but on
     // anything of one flat colour (an awning, plaster) what is left shows as
     // dark mottling that crawls. So both results are first smoothed across
     // neighbouring pixels that lie on the same surface (same depth, same
     // facing). `?denoise=0` shows it without.
-    const smooth = (node: any): any => { // eslint-disable-line @typescript-eslint/no-explicit-any
+    // The smoothing is done at half the canvas each way and stretched back
+    // up, not at full size. Written into the picture's own shader it ran for
+    // every pixel of the canvas, twice (shade, and bounced light), and was
+    // the dearest thing in the frame: 8.5 ms of 26 at 2.25 million pixels,
+    // more than the bounced light it was cleaning. What it smooths was only
+    // ever worked out at half size. `?smoothScale=1` is the old way.
+    const smoothScale = Number(params.get("smoothScale") ?? 0.5);
+    const smooth = (node: any, type: THREE.TextureDataType = THREE.HalfFloatType): any => { // eslint-disable-line @typescript-eslint/no-explicit-any
       if (!on("denoise")) return node;
       const cleaned = made(denoise(node, depth, normals(), camera));
       cleaned.radius.value = Number(params.get("denoiseRadius") ?? 8);
-      return cleaned;
+      return made(rtt(cleaned, null, null, { resolutionScale: smoothScale, type } as never));
     };
     // That effect reaches eight metres, to carry light across a street, and
     // what it gives as shade is as broad: a general dimming, with nothing at
@@ -489,10 +497,10 @@ function compose(level: QualityLevel): void {
       const contact: any = near.getTextureNode(); // eslint-disable-line @typescript-eslint/no-explicit-any
       if (params.get("show") === "contact") debug = contact.sample(screenUV).r;
       // (Drawn into a texture of its own first: the smoothing wants a texture to read, not a sum.)
-      occlusion = convertToTexture(broad.mul(contact.sample(screenUV).r));
+      occlusion = made(rtt(broad.mul(contact.sample(screenUV).r), null, null, { resolutionScale: smoothScale, type: THREE.UnsignedByteType } as never));
     }
-    const shade = smooth(occlusion).r;
-    if (params.get("show") === "broad") debug = smooth(broad).r;
+    const shade = smooth(occlusion, THREE.UnsignedByteType).r;
+    if (params.get("show") === "broad") debug = smooth(broad, THREE.UnsignedByteType).r;
     // Capped: one sample that happens to land on a lamp or the sun's glint
     // would otherwise light its pixel like a spark.
     const bounced = smooth(bounce.getGINode()).rgb.min(2.5);
@@ -557,10 +565,15 @@ function setPixels(width: number, height: number): void {
   // The cascades are cut from the camera's view, so they are recut when it changes shape.
   if ((csm as unknown as { camera: unknown }).camera) csm.updateFrustums();
 }
+// Fewer pixels when a view is too heavy for sixty frames a second (resolution.ts). `?autoscale=0` holds it off.
+const governor = createResolutionGovernor();
+governor.enabled = params.get("autoscale") !== "0" && getSettings().autoResolution;
 function fit(): void {
   // A Retina screen has four times the pixels of an ordinary one and the eye
   // cannot count them: the picture is built from several frames and sharpened.
-  const ratio = Math.min(window.devicePixelRatio, Number(params.get("ratio") ?? QUALITY[quality()].pixelRatio));
+  const full = Math.min(window.devicePixelRatio, Number(params.get("ratio") ?? QUALITY[quality()].pixelRatio));
+  // Never under 0.7 of a CSS pixel each way: below that the picture is plainly soft.
+  const ratio = Math.max(full * governor.scale, Math.min(full, 0.7));
   setPixels(Math.round(canvas.clientWidth * ratio), Math.round(canvas.clientHeight * ratio));
 }
 fit();
@@ -568,6 +581,10 @@ let fitted = true;
 window.addEventListener("resize", () => fitted && fit());
 
 function frame(): void {
+  // The cameras that draw the shadow maps also see the chunks' shadow-only
+  // meshes (map.ts). The cascades' lights are made on the first frame, so
+  // this is said every frame: four bit-sets.
+  for (const cascade of csm.lights as THREE.DirectionalLight[]) cascade.shadow.camera.layers.enable(SHADOW_LAYER);
   pipeline.render(); // the shadow cascades follow the camera by themselves
 }
 
@@ -618,8 +635,10 @@ menu.onStateChanged = (now) => {
 onSettingsChanged((settings, changed) => {
   audio.masterVolume = settings.masterVolume;
   mouse.pointerSpeed = settings.lookSensitivity;
+  if (changed.autoResolution !== undefined) governor.enabled = params.get("autoscale") !== "0" && settings.autoResolution;
   if (changed.quality !== undefined) {
     compose(quality());
+    governor.reset(); // what fitted the old setting says nothing about the new one
     if (fitted) fit();
   }
 });
@@ -656,6 +675,8 @@ renderer.setAnimationLoop(() => {
   if (!running) return;
   const now = performance.now();
   smoothed += (now - last - smoothed) * 0.05;
+  // Not while a test has fixed the canvas's size.
+  if (fitted && governor.sample(now - last)) fit();
   last = now;
   timer.update();
   // Behind a menu the world stands still: nothing is given any time.
@@ -714,7 +735,7 @@ renderer.setAnimationLoop(() => {
   frame();
   if (frames++ % 20 === 0) {
     const info = renderer.info.render as unknown as { drawCalls: number; triangles: number };
-    statsBox.textContent = `${Math.round(1000 / smoothed)} fps · ${smoothed.toFixed(1)} ms · ${info.drawCalls} draws · three r${THREE.REVISION} ${backend}${flying ? " · flying" : ""}`;
+    statsBox.textContent = `${Math.round(1000 / smoothed)} fps · ${smoothed.toFixed(1)} ms · ${info.drawCalls} draws · three r${THREE.REVISION} ${backend}${governor.scale < 1 ? ` · ${Math.round(governor.scale * 100)}% size` : ""}${flying ? " · flying" : ""}`;
   }
 });
 
@@ -726,6 +747,47 @@ async function gpuDone(): Promise<void> {
   else inner.gl?.finish();
 }
 const median = (values: number[]): number => +[...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!.toFixed(1);
+
+/**
+ * What a frame costs when frames are drawn one after another without
+ * waiting: 20 frames are handed to the GPU and timed to the end, then 60,
+ * and the difference is divided by the 40 between. `measure` below waits
+ * for the GPU after every frame, and in some browsers that wait is itself
+ * 50 ms or more; here it is paid once per run and cancels out.
+ * `cpu` is the script's share of a frame.
+ */
+async function pace(): Promise<{ frame: number; cpu: number }> {
+  running = false;
+  const inner = renderer as unknown as { info: { reset(): void }; _nodes: { nodeFrame: { update(): void } } };
+  const burst = async (count: number): Promise<[number, number]> => {
+    const start = performance.now();
+    for (let i = 0; i < count; i++) {
+      inner.info.reset();
+      inner._nodes.nodeFrame.update();
+      frame();
+    }
+    const handed = performance.now() - start;
+    await gpuDone();
+    return [performance.now() - start, handed / count];
+  };
+  await burst(10);
+  const [short] = await burst(20);
+  const [long, cpu] = await burst(60);
+  running = true;
+  return { frame: +((long - short) / 40).toFixed(1), cpu: +cpu.toFixed(1) };
+}
+
+/**
+ * Sets one of the `?name=value` switches as if it were in the address and
+ * builds the picture again, so two settings can be timed back to back in
+ * one page. (Two loads of the page differ by several milliseconds on
+ * their own.) `null` takes the switch away. Only for what `compose` reads.
+ */
+function tune(name: string, value: string | null): void {
+  if (value === null) params.delete(name);
+  else params.set(name, value);
+  compose(quality());
+}
 
 /**
  * Frame time with the GPU's share included, the way the Babylon project
@@ -897,6 +959,9 @@ Object.assign(window, {
     map,
     backend,
     measure,
+    pace,
+    tune,
+    governor,
     frame,
     setPixels(width: number, height: number) {
       fitted = false;

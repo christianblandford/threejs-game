@@ -143,6 +143,63 @@ Where three's 29.5 ms goes, at 2.25 million pixels:
 Of three's effects: temporal anti-aliasing 6.4 ms, bloom 3.6 ms, ambient
 occlusion 2.8 ms. On three's WebGL 2 backend the whole frame is 29.3 ms.
 
+### Measured again, and three things fixed
+
+With everything since ported in, the square took 28 to 30 ms at 2.25
+million pixels: about 34 frames a second in a full window. Each effect was
+switched off in turn in one running page (`bench.tune`, timed with
+`bench.pace`; two loads of the page differ by several milliseconds on their
+own, so settings are compared back to back or not at all):
+
+| | Cost |
+|---|---|
+| Smoothing the bounced light and the shade, two passes at full size | 8.5 ms |
+| The bounced light itself, at half size | 6 ms |
+| Shadows | 3 ms on the GPU, and 8 ms of script: 750 of 1,011 draw calls |
+| Temporal anti-aliasing | 3 ms |
+| Contact shade, bloom, sharpening | 1 ms, under 1, under 1 |
+| The scene alone | 4 ms |
+
+What was done, each checked against stills (a mean difference of 2 to 3
+levels in 255, which is what two captures of the same thing differ by) and
+the flicker measure (unchanged):
+
+- **The smoothing runs at half size.** It was written into the picture's
+  own shader, so it ran for every pixel of the canvas, twice, to clean
+  something that was only ever worked out at half size. Drawn into a
+  half-size texture first: 5.5 ms back.
+- **The bounced light looks in one direction of eight steps at 0.4 of the
+  canvas**, not two of six at half: 4.5 ms back.
+- **A chunk casts its shadow as one mesh.** A chunk's buildings are five or
+  six meshes, one per material, and each was drawn again into every shadow
+  cascade. A shadow map holds only depth, so the solid ones are merged into
+  one mesh per chunk that only the shadow cameras see (`shadowProxy` in
+  `src/map.ts`), and pooled props under half a metre cast nothing. Draw
+  calls 1,011 to 411, script time 12 ms a frame to 5.5.
+
+| At 2.25 million pixels | Before | After |
+|---|---|---|
+| The square | 28 to 30 ms | 16.5 to 17 ms |
+| The terrace, looking over the town | not measured | 20 ms |
+| The meadow by the road | not measured | 23.5 ms (grass is 2.5 of it) |
+| The hall | not measured | 11.5 ms |
+
+What is left is spread thin: bounced light 5 ms, anti-aliasing 3, shadows
+3, the scene 4, trees and grass on top outdoors. None of it is waste of
+the kind above. Past this point the lever is the number of pixels: the
+"high" preset draws 1.25 device pixels per CSS pixel.
+
+So the game now gives up pixels by itself when a view is too heavy
+(`src/resolution.ts`, "Lower resolution to hold 60 fps" in the settings,
+on by default; `?autoscale=0` holds it off). It watches the share of
+frames that miss the display's tick and moves the canvas between full
+size and 0.6 of it each way, in steps of a tenth, never below 0.7 of a
+CSS pixel. The frame counter shows the size when it is not full. Its
+rules were worked out against made-up frame patterns (a heavy view, a
+borderline one, a page held to 20 frames a second, a slow script, a hitch
+every few seconds), and its hold on the canvas checked in the page. It
+has not yet been watched through a real walk in a full-size window.
+
 ## What that means
 
 - **three's core is leaner.** The bare scene costs about half what
@@ -178,6 +235,8 @@ occlusion 2.8 ms. On three's WebGL 2 backend the whole frame is 29.3 ms.
   near the camera. A patch is one draw call; a tuft is 28 bytes that the
   vertex shader turns into blades. How much is planted goes with the
   quality setting (`?grass=` overrides it).
+- `src/resolution.ts`: draws fewer pixels when a view is too heavy for sixty
+  frames a second, and tries more again when things are quiet.
 - `src/physics.ts`: the physics world (Rapier) and the map's colliders: each
   unique mesh's triangles, a box or an upright cylinder for each placing of
   a pooled one.
@@ -408,6 +467,25 @@ Most of the grass drawn is the distant thin sward, not the thick one at
 the player's feet (70,000 tufts against 23,000 in a meadow). One triangle
 a blade there took the grass from 1.67 to 0.96 million triangles with no
 measurable change to the picture.
+
+### An effect written into the picture's shader runs at the picture's size
+
+`denoise(...)`, like most of three's effect nodes that are not passes, is
+a piece of shader: used in the final picture it runs once per pixel of the
+canvas, whatever size its input was worked out at. Two of them cost more
+than the effect they were cleaning. Wrap such a node in
+`rtt(node, null, null, { resolutionScale: 0.5 })` to give it a texture of
+its own at the size it deserves.
+
+### A shadow pass draws every caster again, per cascade
+
+three.js has no cheap path for shadows: each caster is a full draw call in
+each cascade that reaches it, with its own bindings. Count them
+(`renderer.info.render.drawCalls` with and without the sun's `castShadow`)
+before believing shadows are a GPU cost: here they were three quarters of
+the frame's draw calls and two thirds of its script time. A pooled prop
+drawn as one `InstancedMesh` across the map is never culled from a
+cascade, either: its bounding sphere is the map.
 
 ### What makes streaming stutter is objects that are new to the renderer
 

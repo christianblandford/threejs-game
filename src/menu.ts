@@ -140,6 +140,7 @@ export function createMenu(options: MenuOptions): Menu {
         slider("Volume", 0, 1, settings.masterVolume, (masterVolume) => updateSettings({ masterVolume }));
         slider("Look sensitivity", 0.2, 3, settings.lookSensitivity, (lookSensitivity) => updateSettings({ lookSensitivity }));
         checkbox("Invert vertical look", settings.invertY, (invertY) => updateSettings({ invertY }));
+        checkbox("Lower resolution to hold 60 fps", settings.autoResolution, (autoResolution) => updateSettings({ autoResolution }));
         gap();
         button("Back", () => show(home));
         break;

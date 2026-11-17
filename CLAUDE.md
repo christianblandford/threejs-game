@@ -33,8 +33,8 @@ table, the measurements and the traps; read it first.
   browser. `window.bench` exposes every system (`renderer`, `scene`,
   `camera`, `map`, `player`, `physics`, `spaces`, `state`, `interact`,
   `conversations`, `effects`, `navigation`, `npcs`, `menu`, `input`,
-  `audio`) and the measuring hooks (`measure`, `run`, `flicker`,
-  `setPixels`, `look`, `frame`, `perf`).
+  `audio`) and the measuring hooks (`pace`, `tune`, `measure`, `run`,
+  `flicker`, `setPixels`, `look`, `frame`, `perf`).
 - Verify rendering changes on both backends: WebGPU is the default,
   `?webgl` forces WebGL 2.
 
@@ -112,6 +112,22 @@ table, the measurements and the traps; read it first.
   it. Update what exists (the pooled props' instanced meshes are rewritten
   in place, `writeBatches`); do not dispose and remake. Reuse sprites and
   lights from a pool.
+- What a setting costs: `bench.tune("gi", "0")` switches one of the
+  `?name=value` switches in the running page, `await bench.pace()` times
+  frames drawn back to back, `bench.tune("gi", null)` puts it back. Compare
+  in one page, alternating: two loads differ by several milliseconds.
+  The README's "Measured again" has the frame's breakdown.
+- Solid map meshes do not cast shadows themselves: each chunk has one
+  merged mesh on `SHADOW_LAYER` that only the shadow cameras see
+  (`shadowProxy` in `src/map.ts`). Something added to a map that should
+  cast and is not in a chunk's file sets its own `castShadow`. An effect
+  node that is not a pass runs at the canvas's size unless it is wrapped
+  in `rtt(...)` with a `resolutionScale`.
+- The canvas's size is not fixed: `src/resolution.ts` lowers it when frames
+  are missed (`bench.governor`; the frame counter shows "80% size").
+  `bench.setPixels` and `bench.run` take the canvas out of its hands, so
+  timings are not affected; a still or a timing taken any other way should
+  check `bench.governor.scale` is 1 or open the page with `?autoscale=0`.
 - Wrap occasional work in `timed("label", fn)` (`src/perf.ts`). To see
   where a slow frame went: `await bench.run(points, speed)` flies a path and
   reports the worst frames split into streaming, drawing, GPU and arrivals.
