@@ -2,3 +2,14 @@ node_modules
 dist
 .DS_Store
 *.local
+
+# Blender keeps a backup beside every file it saves.
+*.blend1
+
+# The test maps' .blend files are generated (npm run map:make-town,
+# map:make-hall, map:make-test) and large. A map you build by hand should be
+# committed: name it anything else.
+maps/test_*.blend
+
+# Python byte-code caches, written when Blender runs the scripts.
+__pycache__/

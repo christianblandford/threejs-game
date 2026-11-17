@@ -7,7 +7,15 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "check": "tsc --noEmit && vitest run && vite build",
+    "map:export": "node tools/map.mjs export",
+    "map:make-test": "node tools/map.mjs make-test",
+    "map:make-town": "node tools/map.mjs make-town",
+    "map:make-hall": "node tools/map.mjs make-hall",
+    "texture:get": "node tools/textures.mjs",
+    "model:get": "node tools/models.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0",
@@ -17,8 +25,10 @@
     "three": "0.187.0"
   },
   "devDependencies": {
+    "@babylonjs/ktx2encoder": "^9.37.0",
     "@types/three": "0.187.0",
     "typescript": "7.0.2",
-    "vite": "6.4.6"
+    "vite": "6.4.6",
+    "vitest": "^5.1.0"
   }
 }

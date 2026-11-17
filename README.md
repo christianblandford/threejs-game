@@ -1,58 +1,52 @@
-# three.js game prototype
+# three.js game
 
-One question, answered with measurements: **would the Babylon game scaffold
-([babylon-game-engine-starter](https://github.com/christianblandford/babylon-game-engine-starter))
-run faster, at the same quality, on three.js?**
+A base for 3D browser games on three.js r187: its WebGPU renderer and node
+materials, Vite, TypeScript. A small engine (`src/engine/`), a playable
+game built on it (`src/game/`), and the Blender tools that build its levels
+(`tools/`). It is made to be built on by people and by coding agents alike:
+the game advances in fixed ticks from a seed and its inputs, so a run can
+be stepped, read, saved, replayed and compared from a script.
 
-This draws that project's test town with three.js r187: the same exported
-map files and the same textures. It began as a measuring rig (the numbers
-are below), was pushed for looks, and is now being brought toward what the
-Babylon project can do: see "Parity" below for how far that has got.
+```
+npm install
+npm run dev        # the game, at http://localhost:5173
+npm run check      # type-check, unit tests and a production build: run before committing
+npm run map:make-town   # build the test town in Blender and export it (docs/maps.md)
+```
 
 ![The road to the town gate](docs/road.jpg)
 ![The market square](docs/square.jpg)
 ![The moat](docs/moat.jpg)
 
-## Parity with the Babylon project
+## What it does
 
-| | Babylon project | Here |
-|---|---|---|
-| Map streaming, pooled props, shadows, sky light | yes | yes |
-| Ground paths, grass, wind, water shaded by its depth | yes | yes |
-| Bounced light | no | yes |
-| Player: walk, run, jump, steps, follow camera | yes | yes |
-| First person, swimming | yes | yes |
-| Collision with the map | yes (Havok) | yes (Rapier) |
-| Fire, smoke, firelight; fires put out and relit | yes | yes |
-| One-off bursts (dust, sparks, splash, explosion), rain | yes | yes |
-| Other characters, navigation | yes | yes (Recast, as there) |
-| Things to use (E), the gate and its lever | yes | yes |
-| Trigger zones (walk-in areas) | yes (any physics body) | yes (the player only) |
-| Doors and interiors (the town hall) | yes | yes |
-| Travel between levels | yes | no (one level here) |
-| Saved world, Continue and New game | yes | yes |
-| Dialogue (Ink), the steward's errand | yes | yes |
-| HUD: prompt, news line, conversation | yes | yes (HTML) |
-| Title and pause menus, settings | yes | yes (HTML; "New game" and "Restart level" reload the page) |
-| Sound | yes | yes (the same made-up effects; no sound files in either) |
-| Gamepad | yes | yes (and it works the menus and conversations, which it does not there) |
-| The island level | yes | no |
+- **A streamed world.** Levels are built in Blender and exported in chunks:
+  full detail near the camera, one merged mesh per chunk beyond, nothing
+  past the view distance. Repeated props are pooled and drawn as instanced
+  batches. Interiors are separate maps behind doors.
+- **A picture worth looking at.** Sun with four shadow cascades, a sky and
+  light baked from it, bounced light, contact shading, bloom, temporal
+  anti-aliasing; ground with worn paths, grass, wind in the trees, water
+  shaded by its depth. Resolution steps down by itself to hold 60 fps.
+- **A character.** Walk, run, jump, climb steps, swim; third and first
+  person; keyboard and mouse or a gamepad. Rapier for collision.
+- **Other characters** that find their way about (Recast), people to talk
+  to (Ink), things to use, zones to walk into, doors.
+- **Effects and sound.** Fire, smoke and firelight; bursts of dust, sparks,
+  splashes; rain. Synthesised sound, no sound files.
+- **A world that remembers.** What the player did is saved to the browser;
+  Continue and New game; title and pause menus with settings.
+- **A game a script can drive.** `window.game` steps the world, sends
+  inputs, reads state, takes snapshots, replays a recorded run and hashes
+  the result ("A run is its seed and its inputs", below).
+- **Edit while it runs.** Saving a file under `src/game/` rebuilds the game
+  in the running page, where it was.
 
-Doors, the saved world and dialogue follow the Babylon project's design and
-its Blender conventions exactly (`door = "hall#entrance"`, `talk =
-"steward"`, `interact = "gate_lever"`): the same exported maps drive both.
-Measured here, through the hall's door and back: about a second the first
-time (the hall starts loading as the player comes within 30 m of its door),
-half a second after that.
-
-Gamepad: left stick to move, right stick to look, A jump, X use, left
-stick click or left trigger to run, right stick click for first person,
-Start for the menu; in menus and conversations the direction pad picks and
-A accepts, B goes back.
+Not here yet: more than one level (travel between levels), and sound files.
 
 Keys: WASD, Shift to run, Space to jump, E to use, V for first person
 (or zoom all the way in), Esc or P for the menu, R for rain, B for an
-explosion ahead (to try it: the Babylon project has a debug panel for these). The moat can be swum.
+explosion ahead. The moat can be swum.
 
 To try it: walk up the hill to the hall, **E** at its door, talk to the
 steward on the dais (E or Space for the next line, the number keys to
@@ -60,11 +54,15 @@ answer), lower the gate with the lever just inside the gatehouse, and go
 back to him. Reload with `?continue` and you are where you were, with the
 gate as you left it; `?newgame` forgets everything.
 
+Gamepad: left stick to move, right stick to look, A jump, X use, left
+stick click or left trigger to run, right stick click for first person,
+Start for the menu; in menus and conversations the direction pad picks and
+A accepts, B goes back.
+
 ## What makes it look like this
 
 - **Bounced light** (`SSGINode`): a sunlit wall lights the one opposite, and
-  creases and corners are shaded, from one screen-space effect. This is the
-  thing the Babylon version of the town lacks most.
+  creases and corners are shaded, from one screen-space effect.
 - **A strong sun against a weak sky.** Sky light at about a fifth of what the
   sky model gives; sunlit stone several times brighter than stone in shade.
 - **Temporal anti-aliasing** (`TRAANode`), which also averages away the
@@ -73,8 +71,7 @@ gate as you left it; `?newgame` forgets everything.
 - **The sky's own clouds**, also baked into the ambient light.
 - **Water** for anything called Water or Sea: dark, smooth, rippled by two
   drifting normal maps, mirroring the sky.
-- **Tiled surfaces broken up**, as the Babylon game's surface plugin does
-  it: soft blotches of lighter and darker, warmer and cooler, a shifted
+- **Tiled surfaces broken up**: soft blotches of lighter and darker, warmer and cooler, a shifted
   copy of the texture shown in patches, and a much larger copy taking over
   with distance (the Blender materials' `variation` and `detile`).
 - **The ground**: worn paths blended in through the map's mask image, with
@@ -87,10 +84,10 @@ gate as you left it; `?newgame` forgets everything.
   grows short grass, not a few tall tufts. Each blade takes the colour of
   the ground under it.
 - **Wind** in leaves and grass, from the sway data the Blender plant tools
-  store in each mesh. Slow and gentle: half the Babylon game's strength.
+  store in each mesh. Slow and gentle.
 - Four shadow cascades, bloom, a vignette, ACES tone mapping, distance fog.
 
-All of the material work (`src/materials.ts`, `src/grass.ts`) is written
+All of the material work (`src/engine/materials.ts`, `src/engine/grass.ts`) is written
 once, as three's shader nodes, and runs on WebGPU and WebGL alike.
 
 With all of that on, at the size of a full window on a Retina screen: 33 to
@@ -105,165 +102,165 @@ It saves only a few milliseconds here and is not the default: it softens the
 picture and does not average the bounced light's noise well, which shows as
 grain crawling over everything in shade.
 
-## The comparison
-
-The numbers below were taken before any of that, with three's stock effects
-matched by name to the Babylon project's "high" preset.
-
-```bash
-npm install
-npm run dev        # http://localhost:5173
-```
-
-Click to capture the mouse, WASD to move, Shift to run, Space to jump, the
-wheel to zoom, F to switch between walking as the fox and flying the camera.
-
-## What was measured
-
-Frame time with the GPU's share included (draw a frame, wait for the GPU to
-finish, time the whole), in the market square looking north, at three canvas
-sizes. Same machine and browser as the Babylon numbers (Apple GPU, Chrome,
-WebGPU).
-
-| Canvas | Babylon 9.36 | three r187 |
-|---|---|---|
-| 1.0 million pixels | 18.7 ms | 24.4 ms |
-| 2.25 million pixels (a full window on a Retina screen) | 23.3 ms | 29.5 ms |
-| 4.0 million pixels | 29.4 ms | 37.0 ms |
-
-Where three's 29.5 ms goes, at 2.25 million pixels:
-
-| | three r187 | Babylon 9.36 |
-|---|---|---|
-| The scene alone (no shadows, no effects) | 8.3 ms | about 15 ms |
-| Four shadow cascades | 7.6 ms | about 4 ms |
-| Ambient occlusion, temporal anti-aliasing, bloom, sharpening | 13.7 ms | about 4.6 ms |
-| **Whole frame** | **29.5 ms** | **23.3 ms** |
-
-Of three's effects: temporal anti-aliasing 6.4 ms, bloom 3.6 ms, ambient
-occlusion 2.8 ms. On three's WebGL 2 backend the whole frame is 29.3 ms.
-
-### Measured again, and three things fixed
-
-With everything since ported in, the square took 28 to 30 ms at 2.25
-million pixels: about 34 frames a second in a full window. Each effect was
-switched off in turn in one running page (`bench.tune`, timed with
-`bench.pace`; two loads of the page differ by several milliseconds on their
-own, so settings are compared back to back or not at all):
-
-| | Cost |
-|---|---|
-| Smoothing the bounced light and the shade, two passes at full size | 8.5 ms |
-| The bounced light itself, at half size | 6 ms |
-| Shadows | 3 ms on the GPU, and 8 ms of script: 750 of 1,011 draw calls |
-| Temporal anti-aliasing | 3 ms |
-| Contact shade, bloom, sharpening | 1 ms, under 1, under 1 |
-| The scene alone | 4 ms |
-
-What was done, each checked against stills (a mean difference of 2 to 3
-levels in 255, which is what two captures of the same thing differ by) and
-the flicker measure (unchanged):
-
-- **The smoothing runs at half size.** It was written into the picture's
-  own shader, so it ran for every pixel of the canvas, twice, to clean
-  something that was only ever worked out at half size. Drawn into a
-  half-size texture first: 5.5 ms back.
-- **The bounced light looks in one direction of eight steps at 0.4 of the
-  canvas**, not two of six at half: 4.5 ms back.
-- **A chunk casts its shadow as one mesh.** A chunk's buildings are five or
-  six meshes, one per material, and each was drawn again into every shadow
-  cascade. A shadow map holds only depth, so the solid ones are merged into
-  one mesh per chunk that only the shadow cameras see (`shadowProxy` in
-  `src/map.ts`), and pooled props under half a metre cast nothing. Draw
-  calls 1,011 to 411, script time 12 ms a frame to 5.5.
-
-| At 2.25 million pixels | Before | After |
-|---|---|---|
-| The square | 28 to 30 ms | 16.5 to 17 ms |
-| The terrace, looking over the town | not measured | 20 ms |
-| The meadow by the road | not measured | 23.5 ms (grass is 2.5 of it) |
-| The hall | not measured | 11.5 ms |
-
-What is left is spread thin: bounced light 5 ms, anti-aliasing 3, shadows
-3, the scene 4, trees and grass on top outdoors. None of it is waste of
-the kind above. Past this point the lever is the number of pixels: the
-"high" preset draws 1.25 device pixels per CSS pixel.
-
-So the game now gives up pixels by itself when a view is too heavy
-(`src/resolution.ts`, "Lower resolution to hold 60 fps" in the settings,
-on by default; `?autoscale=0` holds it off). It watches the share of
-frames that miss the display's tick and moves the canvas between full
-size and 0.6 of it each way, in steps of a tenth, never below 0.7 of a
-CSS pixel. The frame counter shows the size when it is not full. Its
-rules were worked out against made-up frame patterns (a heavy view, a
-borderline one, a page held to 20 frames a second, a slow script, a hitch
-every few seconds), and its hold on the canvas checked in the page. It
-has not yet been watched through a real walk in a full-size window.
-
-## What that means
-
-- **three's core is leaner.** The bare scene costs about half what
-  Babylon's does, and under 2 ms of CPU for 220 draws.
-- **Its stock shadows and effects are heavier** than Babylon's after that
-  project's tuning: no per-cascade caster culling (600 shadow draws against
-  420), and effect nodes that favour quality over cost.
-- **So with the features matched by name, three is about a quarter slower
-  today.** Tuned the way the Babylon project was (cascade culling, cheaper
-  effect settings), it could plausibly reach 17 to 18 ms here.
-- **The comparison flatters three.** The Babylon frame also draws grass,
-  particles, characters and a HUD, steps physics, and runs that project's
-  own material extensions (large-scale variation, de-tiling, blended paths,
-  wind, water). None of that was here when this was measured. (All of it
-  has been ported since: see the parity table. The comparison has not been
-  measured again with it in.)
-- **Expect parity, give or take a tenth, not a leap.** A port would be a
-  rewrite of the engine for about the same frame rate.
-
 ## What is here
 
-- `src/map.ts`: loads the Babylon project's map format (manifest, chunk
+```
+src/
+  main.ts            the page's start: engine, game, frame loop, window.bench
+  config.ts          the levels and their interiors
+  engine/            what any game here is built on
+    engine.ts          makes all of the below once, as one object
+    renderer.ts        three's WebGPU renderer (or WebGL 2), set up
+    lighting.ts        sun, shadow cascades, sky, baked sky light
+    picture.ts         the scene pass and the chain of effects on it
+    viewport.ts        how many pixels; resolution.ts decides when fewer
+    loop.ts            the frame loop        bench.ts   the measuring hooks
+    simulation.ts      the game's clock: fixed ticks, each from one
+                       frame of input; random.ts, the seeded dice
+    map/               the streamed map: loader, shared materials, pooled
+                       props, shadow meshes, water surfaces
+    materials.ts  surface.ts  water.ts  grass.ts  effects.ts
+    physics.ts  navigation/  walkable.ts  spaces.ts  interact.ts
+    input.ts  mouseLook.ts  audio.ts  settings.ts  params.ts
+    worldState.ts  dialogue.ts  perf.ts
+  game/              this game
+    scene.ts           puts a level, a player and its people together,
+                       and says what a frame of play is
+    player.ts  npcs.ts  gate.ts  conversations.ts  stories/
+    interactions.ts    what the named things in a level do
+    feedback.ts        the sounds and dust of the player's own movement
+    saving.ts  shell.ts  menu.ts  hud.ts  controls.ts  flyCamera.ts
+    bridge.ts          window.game: step, read, snapshot, replay
+tools/
+  blender/           the map exporter, and the scripts that build the test levels
+  map.mjs            runs them (npm run map:export, map:make-town, map:make-hall)
+  textures.mjs  models.mjs   fetch Poly Haven sets into maps/
+maps/                level sources: textures/ and models/ (the .blend files of the
+                     test levels are generated, and not kept)
+public/maps/         exported levels, as the game loads them
+```
+
+Each system is a `createX()` that returns an interface. `createEngine`
+makes the engine's once and hands them round as one object; `createGame`
+(`src/game/scene.ts`) is the file to read to see how a game is put
+together, and the one to change to make a different one. Nothing in
+`engine/` imports from `game/`.
+
+### A run is its seed and its inputs
+
+The world moves in ticks, sixty a second, each from one frame of input
+(`src/engine/simulation.ts`); what is random draws from one seeded source
+(`src/engine/random.ts`, `?seed=`). The display draws between the last
+two ticks, so motion is as smooth at 120 frames a second as at 60. So a
+run can be stepped, recorded and played again exactly, by a test or an
+agent with nobody watching and faster than real time. `window.game`
+(`src/game/bridge.ts`) is how:
+
+```js
+// Open the page with ?hold&slot=playtest : the clock held, a saved world of the run's own.
+await game.time.restart(7);            // a fresh run from tick 0, seed 7
+game.input.move(0, 1, 90, { run: true });
+await game.time.step(90);              // 90 ticks, as fast as they will go
+game.input.press("jump");
+await game.time.step(60);
+game.state.get("player.position");     // plain data
+game.state.hash();                     // the same for the same run, every time
+const run = game.input.recording();    // { seed, level, frames }
+await game.input.replay(run);          // from the start again: same hash
+const shot = await game.capture.screenshot({ width: 640, height: 400 });
+```
+
+Also `game.state.snapshot()` and `restore()`, `game.state.diff(a, b)`,
+`game.time.pause()`, `resume()` and `runTo(tick)`, `game.input.send(frame,
+ticks)` and `look(yaw, pitch)`, `game.sounds()` and `game.logs()`.
+
+Measured: a scripted run of 372 ticks (walking, turning, a jump) gives
+the same hash from a fresh page load, after `time.restart()`, and
+replayed from its recording, with no value differing; another seed moves
+only the foxes. The gate's lever, the door into the hall and the
+steward's conversation all work through it. 120 ticks step in about half
+a second. Two limits, both stated in the code: a restored snapshot puts
+the player and the world back exactly but the foxes only where they were
+and heading where they were going (their paths are found afresh, so they
+may be centimetres off after it; a replay from the start is exact), and
+a conversation in progress is not kept.
+
+The rule that keeps it true: nothing in a tick (`tick` in
+`src/game/scene.ts`, and everything it calls) reads the clock or
+`Math.random()`. What is only seen or heard (the legs' animation, the
+pitch of a sound) may.
+
+### Saving a file puts the game together again
+
+Saving anything under `src/game/` rebuilds the game in the running page
+from the new code, where it was: same place, same state of the world, in
+about a quarter of a second. The engine, the compiled picture and the
+loaded map stay. A change under `src/engine/` reloads the page. It works
+because every part of the game can be taken down cleanly
+(`game.dispose()`): a new part of the game must be able to as well.
+
+Common tasks:
+
+- **A new level:** build it in Blender, `npm run map:export --
+  maps/<name>.blend`, and add an entry to `LEVELS` (`src/config.ts`).
+  `?level=<id>` starts in it. `docs/level-building.md` is the guide and
+  `docs/maps.md` the reference.
+- **Something to use or walk into:** a marker in the map; what it does, by
+  name, in `src/game/interactions.ts`.
+- **Something that should stay changed:** write it to `engine.state`
+  under the level's name and read it back where the thing is built.
+- **A setting to try without a rebuild:** read it with `numberOf` or
+  `switchedOn` (`src/engine/params.ts`) beside its default.
+- **A test:** `*.test.ts` beside what it tests. What is tested so far is
+  what is pure logic: the resolution governor, the saved world, the water
+  lookup, the pooled props.
+
+The systems, one by one:
+
+- `src/engine/map/index.ts`: loads the map format the Blender exporter writes
+  (`docs/maps.md`: manifest, chunk
   files, shared KTX2 textures, pooled meshes as instanced batches) and
   streams it: full detail near the camera, the merged far version beyond,
   nothing past the view distance. Chunks left behind are unloaded (meshes,
   colliders, grass), and a chunk's set-up is spread over frames, 3 ms at a
-  time. `src/perf.ts` times that work (`perf.recording = true`, then
+  time. `src/engine/perf.ts` times that work (`perf.recording = true`, then
   `perf.slowest()` and `perf.totals()` in the console).
-- `src/materials.ts`: what the map's materials need beyond glTF (wind,
+- `src/engine/materials.ts`: what the map's materials need beyond glTF (wind,
   tiled surfaces broken up, the ground's worn paths, water). A level can
   lay its own values over a material's (`materials` in `src/config.ts`).
-- `src/grass.ts`: grass planted on the map's ground, in patches drawn only
+- `src/engine/grass.ts`: grass planted on the map's ground, in patches drawn only
   near the camera. A patch is one draw call; a tuft is 28 bytes that the
   vertex shader turns into blades. How much is planted goes with the
   quality setting (`?grass=` overrides it).
-- `src/resolution.ts`: draws fewer pixels when a view is too heavy for sixty
+- `src/engine/resolution.ts`: draws fewer pixels when a view is too heavy for sixty
   frames a second, and tries more again when things are quiet.
-- `src/physics.ts`: the physics world (Rapier) and the map's colliders: each
+- `src/engine/physics.ts`: the physics world (Rapier) and the map's colliders: each
   unique mesh's triangles, a box or an upright cylinder for each placing of
   a pooled one.
-- `src/player.ts`: the fox, moved by Rapier's character controller, with its
+- `src/game/player.ts`: the fox, moved by Rapier's character controller, with its
   animations. Third person (a camera that follows and keeps clear of
   walls) and first person (V, or zoom all the way in); swimming wherever
   the map's water is deep enough to float in.
-- `src/input.ts`: keyboard and gamepad as actions ("is `jump` down?"), with
+- `src/engine/input.ts`: keyboard and gamepad as actions ("is `jump` down?"), with
   the bindings in one place.
-- `src/menu.ts`: the title screen, pause and settings, in HTML.
-  `src/settings.ts`: what the player has chosen (graphics quality, volume,
+- `src/game/menu.ts`: the title screen, pause and settings, in HTML.
+  `src/engine/settings.ts`: what the player has chosen (graphics quality, volume,
   look speed, inverted look), saved in the browser, and what each level of
-  quality means. `src/audio.ts`: sound on three's `AudioListener` and
+  quality means. `src/engine/audio.ts`: sound on three's `AudioListener` and
   `Audio`, with a few effects synthesised until there are sound files.
-- `src/spaces.ts`: places and the doors between them. An interior is a
+- `src/engine/spaces.ts`: places and the doors between them. An interior is a
   second map loaded beside the level and entered behind a fade; the place
   left is hidden and held, never unloaded. Each place has its own light
   (indoors: less sky, no haze, a higher exposure, shorter shadows).
-- `src/interact.ts`: what the player can use with E, and the zones that
+- `src/engine/interact.ts`: what the player can use with E, and the zones that
   tell when the player walks in or out, both from the map's markers.
-- `src/worldState.ts`: what the player has changed, as named values saved in
+- `src/engine/worldState.ts`: what the player has changed, as named values saved in
   the browser (`town/gate.lowered`); the player's whereabouts are kept there
   too, relative to the place they are in.
-- `src/dialogue.ts`, `src/conversations.ts`, `src/stories/*.ink`: dialogue
+- `src/engine/dialogue.ts`, `src/game/conversations.ts`, `src/game/stories/*.ink`: dialogue
   written in Ink (compiled by the plugin in `vite.config.ts`), which reads
   and writes the saved world with `fact` and `set_fact`.
-- `src/effects.ts`: fire, sparks, smoke and firelight at the map's `fx`
+- `src/engine/effects.ts`: fire, sparks, smoke and firelight at the map's `fx`
   markers. Particles are worked out on the GPU from the time alone (nothing
   is simulated or kept per particle) and drawn in a pass of their own over
   the picture; lights are point lights batched so that their number can
@@ -271,18 +268,20 @@ has not yet been watched through a real walk in a full-size window.
   bursts (dust on landing, a splash, sparks, an explosion with a flash of
   light) are the same particles born all at once, from a small pool of
   sprites; rain is a box of streaks wrapped around the camera.
-- `src/navigation.ts`: where characters can walk (Recast/Detour), built in
+- `src/engine/navigation/index.ts`: where characters can walk (Recast/Detour), built in
   6 m tiles a few per frame from the map's collision geometry and rebuilt
   only where a chunk came or went; paths, and a crowd of agents that avoid
-  each other. `src/npcs.ts`: three foxes that wander the square and now and
+  each other. `src/game/npcs.ts`: three foxes that wander the square and now and
   then trot over to the player. **N** draws the walkable area.
-- `src/gate.ts`: the portcullis and its lever. `src/hud.ts`: the words on
+- `src/game/gate.ts`: the portcullis and its lever. `src/game/hud.ts`: the words on
   screen. `src/config.ts`: the level and its interiors.
-- `src/main.ts`: the renderer (sun, cascades, sky and baked sky light, fog,
-  the effect chain), the game loop that ties the above together, and the
-  measuring hooks.
-- `public/maps/test_town/`: the town, as exported by the Babylon project's
-  Blender tools.
+- `src/engine/renderer.ts`, `lighting.ts`, `picture.ts`: the renderer, the
+  sun with its cascades, sky and baked sky light and fog, and the effect
+  chain. `src/engine/bench.ts`: the measuring hooks.
+- `public/maps/test_town/`: the town, built and exported by
+  `npm run map:make-town` (`tools/blender/make_test_town.py`); its hall by
+  `npm run map:make-hall`. The exporter and the format are shared with the
+  Babylon project: a map exported here loads there, and the other way.
 
 URL switches: `?continue` and `?newgame` (the saved game); `?menu` (show the
 title screen in development) and `?quality=low|medium|high|ultra`; `?detail=` and
@@ -291,7 +290,7 @@ shows chunks coming and going); `?webgl` (WebGL 2 backend), `?post=0`, `?shadows
 `?ao=0`, `?traa=0`, `?bloom=0`, `?sharpen=0` for one effect at a time;
 `?scale=` (how much of the canvas is drawn before upscaling, default 1: none)
 and `?ratio=` (the cap on device pixel ratio, default 1.25). The comparison
-table was measured with `?gi=0&scale=1`.
+table in `docs/measurements.md` was measured with `?gi=0&scale=1`.
 
 To measure, in the console:
 
@@ -300,332 +299,18 @@ bench.setPixels(1527, 1471);
 await bench.measure();   // { cpu, total } in milliseconds, medians of 120 frames
 ```
 
-## What is three.js's own, and what is not
+## More to read
 
-The rule here is the Babylon project's: what the engine ships first, then
-the library everyone recommends, and code of our own only where neither
-exists.
-
-- **From three.js and its add-ons:** the WebGPU renderer and node materials,
-  `RenderPipeline` and every screen effect (`SSGINode`, `GTAONode`,
-  `DenoiseNode`, `TRAANode`, `BloomNode`), `CSMShadowNode`, `SkyMesh`,
-  `PMREMGenerator`, `GLTFLoader` and `KTX2Loader`, `InstancedMesh`,
-  `AnimationMixer`, `DynamicLighting`, `PointerLockControls` (mouse look),
-  `Timer` (frame time), `AudioListener` and `Audio`.
-- **Recommended libraries:** Rapier for physics, including its own character
-  controller; recast-navigation-js for navigation; inkjs for dialogue.
-- **Written here, because three.js has nothing:** map streaming, grass,
-  the particles (as node-material sprites), doors and interiors, the saved
-  world, the things to use, menus and HUD (HTML).
-
-About `three/addons/physics/RapierPhysics.js`: it wraps the same Rapier
-package and version used here, but it is a helper for demos. It imports
-Rapier from a CDN at run time, and it steps the world by itself on a
-real-time timer, so the world cannot be paused or stepped by the game's own
-clock. The game therefore uses Rapier directly (`src/physics.ts`).
-
-## Traps worth knowing
-
-**Moving vertices in a shader makes everything that moves vibrate, unless
-the previous position is moved too.** three's motion vectors compare where
-a vertex is now with where it was, and "where it was" is the untouched
-mesh. A `positionNode` that only moves the current position (wind, here)
-makes every swaying leaf appear to jump by its whole sway each frame;
-temporal anti-aliasing then discards its history for those pixels and the
-picture never settles, with camera and wind both still. `displaced()` in
-`src/materials.ts` adds the same offset to `positionPrevious`. Found by
-measuring: `bench.flicker(16, true)` in the console draws a run of frames
-from a still camera and shows which pixels change. Trees and grass went
-from 16% of pixels changing to under 5%.
-
-**Screen-space bounced light is grainy, and three things each made it
-worse.** It takes a few random samples per pixel and relies on temporal
-anti-aliasing to average them. What is left shows as grain that crawls:
-dark mottling on anything of one flat colour (an awning, plaster), and
-orange sparks on the wall beside every lamp.
-
-- *A plain sharpening pass afterwards* more than doubles whatever difference
-  is left between frames. It was removed, and later put back in its
-  noise-aware form once the smoothing below was in (see "Three defaults"
-  further down).
-- *No spatial smoothing.* `DenoiseNode` over both of the effect's results,
-  across neighbouring pixels on the same surface, is what clears flat
-  colours. About 3 ms.
-- *Very bright small things in the picture it samples* (a lamp at seven
-  times sunlit white): the few samples that land on one light their pixels
-  like sparks. The picture it gathers from is capped at about sunlit white.
-
-Measured on a sunlit view with the camera still (share of pixels moving by
-more than 8 brightness levels over 20 frames): 7.7% as first built; 1.3%
-without sharpening; 0.3% with smoothing as well, which is the same as with
-no bounced light at all. `?denoise=0` and `?giSourceLimit=1000` each put
-one of them back.
-
-**Bloom needs a ceiling as well as a threshold.** The sky model's sun disc
-is thousands of times brighter than a lamp. With only a threshold, a glow
-faint enough for lamps still veils the whole picture in white whenever the
-sun is in view. What is fed to the bloom is capped (`?bloomCap=`), and the
-sky's haze is kept low and tight around the sun, or a third of the sky
-toward it is glare with no bloom at all.
-
-**Timing three by hand.**
-
-three redraws the scene once per tick of its own animation loop. Call
-`render()` twice in one tick and the second call redraws only the final
-full-screen quad. A benchmark loop of hand-made frames therefore measures
-almost nothing (the first numbers here said the bare scene took 2.7 ms)
-unless it advances the tick itself, as `measure()` in `src/main.ts` does.
-Counting the GPU's draw calls per frame is what caught it.
-
-### Three defaults that made the picture soft and the sky white
-
-Found by critics who had not built it (see "Judged by fresh critics"
-below), not by looking at it ourselves for a day.
-
-- *Textures are not filtered along the line of sight unless asked.* three's
-  default anisotropy is 1. Ground and walls are mostly seen at a shallow
-  angle, and cobbles turned to a flat colour ten metres from the camera.
-  Map textures now get 8 (`upgradeMaterial`). Fine detail in the stills rose
-  10 to 25%.
-- *Temporal anti-aliasing takes away more than half of the fine detail.*
-  Measured on a still of the road: 88 with it off, 39 with it on (mean
-  absolute Laplacian of brightness; the Babylon still measures 119).
-  Bounced light and the other effects made no difference. `SharpenNode`
-  straight after it, with its `denoise` option on, brings it to 68 and
-  leaves frame-to-frame flicker where it was (0.02% of pixels against
-  0.03%), for 0.6 ms. Plain sharpening, earlier, doubled the flicker and
-  was taken out: the option is what makes it usable.
-- *The sky model is physical and far brighter than the town it lights.*
-  Looking toward the sun, 12% of the frame was pure white. Easing its
-  brightness off at the top stopped the clipping but left a pale blank,
-  because sky and cloud were pressed against the same ceiling. Turning the
-  sky down first and then easing it keeps cloud brighter than sky: 0.1% of
-  the frame clipped, sky saturation 0.35 from 0.05. Only what is seen is
-  changed; the light the town gets is baked from another copy of the sky.
-
-### Shade with no form in it
-
-A critic judging stills against a shipped game named this first: house
-fronts out of the sun were one flat murky tone. Four things were behind it.
-
-- *The bounced-light effect's own occlusion does nothing local.* It reaches
-  eight metres, to carry light across a street. With the whole effect off,
-  the picture was the same, only 7% brighter everywhere: a dimmer, not shade
-  in corners. A second, short-reach occlusion (`GTAONode`, 1.2 m, raised to
-  the power 2) is what darkens the foot of a wall and the underside of an
-  eave.
-- *That occlusion flickers unless it is smoothed.* Raised to a power, its
-  grain put ten times as many pixels in motion as the rest of the picture
-  (0.3% against 0.03%). Smoothing it by itself cost 4.8 ms a frame. The
-  two occlusions are instead multiplied into one texture and smoothed
-  together, by the pass the bounced light already pays for: 1.7 ms, and the
-  flicker back at 0.04%.
-- *The sky model carries on below the horizon as more sky.* So everything in
-  shade was lit from below as brightly and as coolly as from above. A warm
-  disc stands in for the sunlit ground in the baked sky light. Measured, the
-  sky it replaces is worth about 5: at 5 only the colour changes, at 1.5
-  shaded walls go a fifth darker. It is set to 6.
-- *Shadow edges were a ruled line.* `shadow.radius` 3 (texels) softens them
-  and costs nothing measurable.
-
-Exposure went from 0.66 to 0.78 with it, so that shaded fronts are filled
-and sunlit stone is nearer white; 0.88 gained seven levels at the bright
-end and cost the sky a sixth of its colour.
-
-### Grass darker than the ground it grows on
-
-Two critics measured the blades 45 levels darker than their ground, and in
-town near black. The blades' normals all point up, so that a field is lit
-as the ground is and not blade by blade; but the material is two-sided,
-and three.js turns the normal round on any face seen from behind. Half the
-blades were being lit from below. Give such a material its own
-`normalNode` (here simply "up", in view space): what a material supplies
-there is used as it is, for both faces.
-
-Four more things the same rounds settled, each against a blind critic:
-
-- **Thin cover should be short grass, not a few tall tufts.** Planting
-  fewer tufts where the paint is thin left town lawns with a dozen clumps
-  on bare ground. The count now falls off slowly with the paint (its 0.35
-  power) and the height takes the rest.
-- **Much of a size.** A first version had sprigs a twentieth of the fox's
-  height with the odd clump as tall as it: "weeds on bare ground". Blades
-  now run 10 to 20 cm, 1 cm wide. A blade is never drawn narrower than a
-  pixel and a half, or a field of them shimmers (0.17% of pixels changing
-  with the camera and the wind both still, against 0.03% for bare ground).
-- **A narrow threshold on a mask shows the mask's pixels.** The path edge
-  was first sharpened by narrowing the blend, and came out stair-stepped:
-  the mask is 37 cm a pixel. It is now read four times around each point,
-  and the edge is broken by two sizes of noise and by the earth's own
-  texture instead.
-- **Darkening the grass ground made it olive**, and a blind critic preferred
-  it as it was. The pale earth of the paths is what washed out in this
-  renderer's brighter sun, and only that is held down (`materials` in
-  `src/config.ts`).
-
-Most of the grass drawn is the distant thin sward, not the thick one at
-the player's feet (70,000 tufts against 23,000 in a meadow). One triangle
-a blade there took the grass from 1.67 to 0.96 million triangles with no
-measurable change to the picture.
-
-### An effect written into the picture's shader runs at the picture's size
-
-`denoise(...)`, like most of three's effect nodes that are not passes, is
-a piece of shader: used in the final picture it runs once per pixel of the
-canvas, whatever size its input was worked out at. Two of them cost more
-than the effect they were cleaning. Wrap such a node in
-`rtt(node, null, null, { resolutionScale: 0.5 })` to give it a texture of
-its own at the size it deserves.
-
-### A shadow pass draws every caster again, per cascade
-
-three.js has no cheap path for shadows: each caster is a full draw call in
-each cascade that reaches it, with its own bindings. Count them
-(`renderer.info.render.drawCalls` with and without the sun's `castShadow`)
-before believing shadows are a GPU cost: here they were three quarters of
-the frame's draw calls and two thirds of its script time. A pooled prop
-drawn as one `InstancedMesh` across the map is never culled from a
-cascade, either: its bounding sphere is the map.
-
-### What makes streaming stutter is objects that are new to the renderer
-
-Measured on a flight across the town at 12 m/s (`bench.run`, 1280x800,
-every frame timed with the GPU's share): the loader's own work when a chunk
-arrives (colliders, grass, sorting) was never more than 8 ms, and the game
-still dropped 67 frames to over 50 ms, the worst to 183 ms. All of that was
-CPU time inside the draw. three.js prepares every object the first time
-each pass draws it (the picture and each of four shadow cascades), a
-fraction of a millisecond per object per pass, and the loader was throwing
-away and remaking all hundred-odd instanced meshes of pooled props whenever
-any chunk changed. Rewriting them in place (and making a larger one only
-when one is outgrown) left 1 frame over 50 ms, the worst 53 ms, the 99th
-percentile at 28 ms from 155 ms.
-
-Two things that follow. Never rebuild what can be updated. And switching a
-new chunk's meshes on a few per frame, to spread that first-draw cost, was
-tried and was worse (156 frames over 33 ms against 2): a frame with anything
-new in it pays a cost that is mostly not per mesh, so fewer such frames win.
-
-Comparisons like these are only worth anything at a fixed canvas size, back
-to back: the same flight measured twice an hour apart, in a window that had
-changed size, differed by a factor of two.
-
-With navigation and the foxes running, the same flight has 28 frames over
-33 ms (of 1,242) and a 99th percentile of 40 ms: each chunk that arrives
-has the walkable area re-planned around it, 4 to 17 ms in one piece, and a
-tile in a built-up street can take 16 ms to build. That planning is the
-next thing to spread over frames. The first build after loading (about a
-thousand tiles) takes some fifteen seconds in the background at a tile or
-so per frame.
-
-### Thin smoke over a bright surface does not show
-
-The picture is tone-mapped on its way to the screen, which squeezes its
-bright end: smoke that covers a quarter of a sunlit pavement darkens it on
-screen by a few per cent. The explosion's smoke was drawn correctly for an
-hour and could not be seen. Smoke meant to be seen against lit ground wants
-to be nearly opaque at its thickest; against the sky far less will do.
-
-### A pass keeps the buffers it was first given
-
-Changing graphics quality rebuilds the chain of effects (`compose` in
-main.ts) and that works, with one condition: the scene pass must go on
-writing the same set of buffers. Asked to write fewer than before (no
-surface directions on "low", say), three.js still has the old ones on the
-pass, looks for what should be written to them while compiling each
-material, and throws: a black screen. So every quality level writes all
-four, used or not.
-
-### The loader may hand a mesh a copy of your material
-
-Water is found by its material, which the map supplies. Comparing a mesh's
-material with the one supplied (`mesh.material === water`) missed the moat:
-`GLTFLoader` gives a mesh a clone when the mesh has something the material
-must know about (vertex colours, no tangents). The moat was then given a
-collider like any ground, and could be walked on. Mark the material
-(`userData`, which a clone keeps) and test the mark.
-
-### Particles do not belong in the main pass
-
-The main pass writes more than colour: surface direction and movement, one
-value per pixel, for the bounced light and the anti-aliasing. Those buffers
-do not blend, so a transparent particle drawn there stamps its whole square
-into them. Fire and smoke are therefore a scene of their own, drawn in a
-second pass and laid over the picture after the anti-aliasing and before
-the glow. Hiding behind walls is then done by hand, by comparing each
-pixel's distance with the main pass's depth. Read that depth at `screenUV`
-yourself: the pass's ready-made `getViewZNode()` samples with the
-material's default texture coordinates, which on a sprite are the sprite's
-own, and each particle then shows a tiny picture of the whole room.
-
-### Lights that come and go
-
-With three's ordinary lighting, the number of lights is part of every
-material's shader: a fire lit or put out recompiles all of them.
-`renderer.lighting = new DynamicLighting(...)` (an add-on) turns point
-lights into a list the shader loops over, whose length is free. Two things
-to keep: one point light that is always in the scene (giving no light), so
-the first real one is not the change that recompiles everything; and no
-shadows from these lights (a shadow-casting light goes back to the ordinary
-path).
-
-## Judged by fresh critics
-
-The look has been judged by reviewers who were given only stills
-and a bar, never the code or the reasoning behind it. Six views were
-captured from this game and from the Babylon one at the same size, cropped
-alike, shuffled into anonymous pairs, and each critic was asked which of
-each pair is closer to a shipped game's screenshot and why, with numbers.
-Every critic sorted the twelve images into the two renderers correctly.
-
-| Round | Change before it | Pairs won here | Its top fault with this game |
-|---|---|---|---|
-| 1 | none | 4 of 6 | soft picture; sky white toward the sun |
-| 2 | anisotropic filtering, sky eased | 2 of 6, all slight | still soft; sky pale and empty |
-| 3 | sharpening after anti-aliasing, sky turned down then eased | 6 of 6 | soft (now minor); water smeared; lamps do not glow |
-| 4 | contact occlusion, warm ground light, soft shadow edges | 5 of 6 | water smeared (the one view lost); no distance haze |
-| 5 | ground and grass, first attempt | 4 of 6 | bare bank at the moat (lost); the hall view was a spoiled capture (lost) |
-| 6 | ground and grass, second attempt | 6 of 6, five clearly | soft trees and water; pale empty sky; no distance haze |
-
-Read the pair counts loosely: a different critic judged each round, and
-rounds 1 and 2 disagree about nearly the same pictures. What is certain is
-what was measured (above). One caveat: the Babylon stills may carry its
-on-screen place names, which this game draws outside the canvas.
-
-More critics judged this game's stills alone against a shipped game's
-screenshots. All of them said no.
-
-| When | Stills that passed | Top fault |
-|---|---|---|
-| before any change | the hall | shade with no form; sky white toward the sun |
-| after round 4's changes | the hall | house fronts in shade too dark and flat; nothing near white |
-| after easing the occlusion and raising exposure | the hall, the square | bare flat ground with sparse oversized grass |
-| ground and grass, first attempt | the square | the same, with new numbers: tufts too few and too small |
-| ground and grass, second attempt | the hall, the square | blades darker than their ground; town lawns bare |
-| blades lit and coloured as their ground | the hall, the moat | town lawns: khaki ground a tenth covered |
-
-The ground and grass were also judged blind against themselves: the same
-five views before and after, shuffled.
-
-| Attempt | Views where the new version was preferred | What decided it |
-|---|---|---|
-| first | 2 of 5, both slightly | tufts had become tiny and sparse, the lawn olive, the path edge stair-stepped |
-| second | 5 of 5, four clearly | fine dense blades against "agave or paper cut-outs" |
-| third (blades lit and coloured as their ground) | 5 of 5, four clearly | the same; and the path's broken edge |
-
-The first attempt is worth the row: it followed the previous critic's
-words (smaller, darker, sharper) and a blind critic preferred what was
-there before. What it got right was kept, and the three things it got
-wrong are in "Grass darker than the ground it grows on" above.
-
-Shade is no longer among the faults, and the meadow and the moat bank now
-read as grass. What stands between this and a yes, in the last critic's
-order: the town's lawns, which are khaki ground a tenth covered in blades
-(the map's paint is thin and dry there: content, in the Blender level, not
-this renderer), and the bare band between a path and its meadow; glass,
-lamps and cobbles with no shine or glow; a picture whose sunlit stone sits
-at one pale value; flat cloth and props; water that reflects only the sky.
-Where lawn meets cobbles or a wall the edge is still a ruler's line.
+- [docs/maps.md](docs/maps.md): the map pipeline and every Blender
+  convention the game reads.
+- [docs/level-building.md](docs/level-building.md): how a level is put
+  together, step by step.
+- [docs/lessons.md](docs/lessons.md): what three.js gives and what had to
+  be written, and the traps that cost real time.
+- [docs/measurements.md](docs/measurements.md): this project measured
+  against the same game on Babylon.js, how the frame was brought down, and
+  what fresh critics made of the pictures.
+- `CLAUDE.md`: the working rules, for coding agents and people.
 
 ## Credits
 
@@ -634,5 +319,7 @@ Physics is [Rapier](https://rapier.rs) (Apache-2.0). Navigation is
 [Ink](https://www.inklestudios.com/ink), played by `inkjs` (MIT). The fox is the Khronos
 glTF sample "Fox": model by PixelMannen (CC0), rigging and animation by
 @tomkranis (CC-BY 4.0), glTF conversion by @AsoboStudio and @scurest (CC-BY 4.0).
-The town's textures are from [Poly Haven](https://polyhaven.com) (CC0). The water's ripple map
+The town's textures, and the scanned plants and props in `maps/models/`, are from
+[Poly Haven](https://polyhaven.com) (CC0). The exporter's texture encoder is Basis Universal
+(Apache-2.0), as built in `@babylonjs/ktx2encoder`. The water's ripple map
 (`public/textures/waternormals.jpg`) is from the three.js examples (MIT).

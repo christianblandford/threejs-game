@@ -1,0 +1,12 @@
+{
+  "id": "dandelion_01",
+  "name": "Dandelion 01",
+  "triangles": 64099,
+  "resolution": "1k",
+  "source": "https://polyhaven.com/a/dandelion_01",
+  "license": "CC0",
+  "authors": [
+    "Rob Tuytel",
+    "Rico Cilliers"
+  ]
+}

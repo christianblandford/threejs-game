@@ -1,0 +1,11 @@
+{
+  "id": "dirt_floor",
+  "name": "Dirt Floor",
+  "metres": 2.07,
+  "resolution": "1k",
+  "source": "https://polyhaven.com/a/dirt_floor",
+  "license": "CC0",
+  "authors": [
+    "eye-candy.xyz"
+  ]
+}

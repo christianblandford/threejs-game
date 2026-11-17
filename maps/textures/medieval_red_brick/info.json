@@ -1,0 +1,11 @@
+{
+  "id": "medieval_red_brick",
+  "name": "Medieval Red Brick",
+  "metres": 2,
+  "resolution": "1k",
+  "source": "https://polyhaven.com/a/medieval_red_brick",
+  "license": "CC0",
+  "authors": [
+    "Rob Tuytel"
+  ]
+}

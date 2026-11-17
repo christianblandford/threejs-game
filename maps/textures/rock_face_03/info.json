@@ -1,0 +1,12 @@
+{
+  "id": "rock_face_03",
+  "name": "Rock Face 03",
+  "metres": 2.7,
+  "resolution": "1k",
+  "source": "https://polyhaven.com/a/rock_face_03",
+  "license": "CC0",
+  "authors": [
+    "Dario Barresi",
+    "Rico Cilliers"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "defense_wall_02",
+  "name": "Defense Wall 02",
+  "metres": 12,
+  "resolution": "2k",
+  "source": "https://polyhaven.com/a/defense_wall_02",
+  "license": "CC0",
+  "authors": [
+    "Rob Tuytel"
+  ]
+}

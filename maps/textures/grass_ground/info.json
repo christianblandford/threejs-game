@@ -1,0 +1,11 @@
+{
+  "id": "grass_ground",
+  "name": "Grass Ground",
+  "metres": 2.51,
+  "resolution": "1k",
+  "source": "https://polyhaven.com/a/grass_ground",
+  "license": "CC0",
+  "authors": [
+    "Charlotte Baglioni"
+  ]
+}
